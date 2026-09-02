@@ -18,7 +18,9 @@
 #define MyAppUrl "https://github.com/SmeshidoJoe/Shotly"
 
 [Setup]
-AppId={{4E639334-0BA6-48F9-BEA0-8991ADF23C37}
+; Первая скобка удвоена не по ошибке: одиночная «{» в Inno Setup начинает
+; константу, и AppId с GUID без экранирования не компилируется.
+AppId={8707BE45-788D-41B5-8556-9798919C1169}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}

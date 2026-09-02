@@ -57,11 +57,12 @@ _RU = {
     "Images":                       "Изображения",
 
     # --- Обновления ------------------------------------------------------ #
-    "Check for updates on startup": "Проверять обновления при запуске",
+    "Notify about new versions":    "Уведомлять о новых версиях",
     "Check now":                    "Проверить сейчас",
     "Checking...":                  "Проверка...",
     "You have the latest version":  "Установлена последняя версия",
     "Update available":             "Доступно обновление",
+    "Click to install":             "Нажмите, чтобы установить",
     "Update failed":                "Не удалось обновить",
     "Downloading...":               "Загрузка...",
     "Install and restart":          "Установить и перезапустить",
@@ -73,8 +74,6 @@ _RU = {
     "Saved":                        "Сохранено",
     "Save failed":                  "Не удалось сохранить",
     "Nothing to capture":           "Нечего снимать",
-    "Shotly is running in the tray": "Shotly свернулся в трей",
-    "Press %s to capture an area":  "Нажмите %s, чтобы снять область",
     "Pen":                          "Карандаш",
     "Line":                         "Линия",
     "Arrow":                        "Стрелка",

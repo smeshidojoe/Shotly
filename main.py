@@ -106,8 +106,7 @@ def main():
     _install_console_interrupt(app, controller)
 
     controller.sync_autostart()
-    controller.check_updates_async()
-    controller.run_first_launch()
+    controller.start_update_watch()
     return app.exec()
 
 

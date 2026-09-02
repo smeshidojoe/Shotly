@@ -13,13 +13,16 @@ from PySide6.QtCore import QObject, QRect, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from .core import autostart, capture, config, i18n, saver, updater
-from .core.constants import APP_NAME, CONFIG_PATH, IS_FIRST_RUN
-from .core.hotkey import HotkeyManager, pretty
+from .core.constants import CONFIG_PATH
+from .core.hotkey import HotkeyManager
 from .core.i18n import tr
 from .ui import theme, toast
 from .ui.about import AboutWindow
 from .ui.overlay import Overlay
 from .ui.settings_window import SettingsWindow
+
+# Как часто спрашиваем GitHub о новой версии в фоне.
+_UPDATE_INTERVAL_MS = 2 * 60 * 60 * 1000
 
 _FILTERS = {
     "png": "PNG (*.png)",
@@ -41,6 +44,8 @@ class App(QObject):
         self._settings_win = None
         self._about_win = None
         self._last_selection = None       # QRect в координатах экрана
+        self._update_timer = None
+        self._pending_update = None
 
         self.hotkeys = HotkeyManager(self)
         self.hotkeys.capture.connect(self.start_capture)
@@ -175,11 +180,44 @@ class App(QObject):
     def open_settings(self):
         if self._settings_win is not None:
             self._settings_win.close()
-        win = SettingsWindow(self.settings, app=self)
+        self._settings_win = self._build_settings(self.settings)
+        self._settings_win.center_on_cursor_screen()
+        self._show(self._settings_win)
+
+    def _build_settings(self, draft):
+        win = SettingsWindow(draft, app=self)
         win.applied.connect(self.apply_settings)
-        win.closed.connect(lambda: setattr(self, "_settings_win", None))
+        win.language_changed.connect(self._relanguage_settings)
+        win.closed.connect(self._forget_settings_win)
+        return win
+
+    def _forget_settings_win(self):
+        # Пересборка окна закрывает старое: ссылку чистим только если она ещё
+        # указывает на закрывшееся окно, иначе затрём только что созданное.
+        sender = self.sender()
+        if sender is self._settings_win:
+            self._settings_win = None
+
+    def _relanguage_settings(self, lang):
+        """Смена языка на месте: собираем окно заново, сохранив несохранённые
+        правки, вкладку и положение — иначе надпись «Настройки» и полсотни
+        подписей остались бы на прежнем языке до следующего открытия."""
+        old = self._settings_win
+        if old is None:
+            return
+        draft, tab, pos = dict(old.s), old.tabs.index(), old.pos()
+        i18n.set_language(lang)
+        if self.tray is not None:
+            self.tray.retranslate()
+        old.close()
+        win = self._build_settings(draft)
         self._settings_win = win
-        win.center_on_cursor_screen()
+        win.move(pos)
+        win.tabs.set_index(tab)
+        self._show(win)
+
+    @staticmethod
+    def _show(win):
         win.show()
         win.raise_()
         win.activateWindow()
@@ -191,9 +229,7 @@ class App(QObject):
         win.closed.connect(lambda: setattr(self, "_about_win", None))
         self._about_win = win
         win.center_on_cursor_screen()
-        win.show()
-        win.raise_()
-        win.activateWindow()
+        self._show(win)
 
     def open_updates(self):
         self.open_settings()
@@ -239,17 +275,6 @@ class App(QObject):
         except OSError:
             pass
 
-    def run_first_launch(self):
-        """Первый запуск: программа свернулась в трей молча, и без подсказки её
-        просто не находят."""
-        if not IS_FIRST_RUN:
-            return
-        combo = pretty(self.settings.get("hotkey", ""))
-        QTimer.singleShot(900, lambda: toast.show(
-            tr("Shotly is running in the tray"),
-            tr("Press %s to capture an area") % combo,
-            icon_name="camera"))
-
     def sync_autostart(self):
         """Приводит реестр к настройке при запуске: пользователь мог убрать
         программу из автозапуска сторонним средством."""
@@ -263,8 +288,20 @@ class App(QObject):
     # ------------------------------------------------------------------ #
     #  Обновления
     # ------------------------------------------------------------------ #
-    def check_updates_async(self):
-        if not self.settings.get("check_updates") or not updater.is_frozen():
+    def start_update_watch(self):
+        """Тихая проверка новых версий: первая через ~8 c после старта, дальше
+        раз в 2 часа. Только для собранного exe — из исходников подменять нечего.
+        Нагрузка ничтожна: один HTTP-запрос к GitHub в фоновом потоке."""
+        if not updater.is_frozen():
+            return
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(_UPDATE_INTERVAL_MS)
+        self._update_timer.timeout.connect(self._check_updates_bg)
+        self._update_timer.start()
+        QTimer.singleShot(8000, self._check_updates_bg)
+
+    def _check_updates_bg(self):
+        if not self.settings.get("check_updates", True):
             return
         threading.Thread(target=self._check_updates_worker, daemon=True).start()
 
@@ -274,13 +311,38 @@ class App(QObject):
             self.update_found.emit(info)
 
     def _on_update_found(self, info):
-        self._toast("%s: %s" % (tr("Update available"), info.get("version", "")),
-                    APP_NAME, icon_name="info", on_click=self.open_updates)
+        if not self.settings.get("check_updates", True):
+            return
+        version = info.get("version") or ""
+        if not info.get("download_url"):
+            return                    # без zip-ассета ставить всё равно нечего
+        if version and version == self.settings.get("update_dismissed_version"):
+            return                    # об этой версии уже сказали, и её закрыли
+        self._pending_update = info
+        toast.show("%s: %s" % (tr("Update available"), version),
+                   tr("Click to install"), icon_name="info",
+                   on_click=self._install_pending_update,
+                   sticky=True, on_dismiss=self._dismiss_pending_update)
+
+    def _install_pending_update(self):
+        info, self._pending_update = self._pending_update, None
+        if not info:
+            return
+        self.open_settings()
+        if self._settings_win is not None:
+            self._settings_win.begin_update(info)
+
+    def _dismiss_pending_update(self):
+        info, self._pending_update = self._pending_update, None
+        version = (info or {}).get("version") or ""
+        if version:
+            self.settings["update_dismissed_version"] = version
+            self._save_settings()
 
     # ------------------------------------------------------------------ #
     def _toast(self, text, subtext="", icon_name="check", open_path="",
                on_click=None):
-        if not self.settings.get("notify", True) and on_click is None:
+        if not self.settings.get("notify", True):
             return
         toast.show(text, subtext, icon_name, open_path, on_click)
 

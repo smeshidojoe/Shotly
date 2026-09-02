@@ -54,6 +54,10 @@ class _Downloader(QObject):
 
 class SettingsWindow(Window):
     applied = Signal(dict)
+    # Язык меняется на месте: владелец пересобирает окно на новом языке, потому
+    # что перевести полсотни уже созданных подписей по одной дороже, чем собрать
+    # окно заново (см. App._relanguage_settings).
+    language_changed = Signal(str)
 
     def __init__(self, settings, app=None, parent=None):
         super().__init__(tr("Settings"), parent)
@@ -142,15 +146,26 @@ class SettingsWindow(Window):
         self._check("copy_after_save", tr("Copy to clipboard after saving"), lay)
 
         lay.addSpacing(theme.s(6))
-        label = QLabel(tr("Language"), self)
+        lay.addWidget(QLabel(tr("Save folder"), self))
+        self._dir_edit = QLineEdit(self.s.get("save_dir", ""), self)
+        self._dir_edit.textChanged.connect(
+            lambda t: self.s.__setitem__("save_dir", t))
+        browse = QPushButton(tr("Browse..."), self)
+        browse.clicked.connect(self._pick_dir)
+        lay.addLayout(self._row(self._dir_edit, browse, stretch_last=False))
+
+        lay.addSpacing(theme.s(2))
+        lang_row = QHBoxLayout()
+        lang_row.addWidget(QLabel(tr("Language"), self))
         combo = QComboBox(self)
         combo.addItem("Русский", "ru")
         combo.addItem("English", "en")
         combo.setCurrentIndex(0 if self.s.get("language") == "ru" else 1)
-        combo.currentIndexChanged.connect(
-            lambda i, c=combo: self.s.__setitem__("language", c.itemData(i)))
-        lay.addWidget(label)
-        lay.addWidget(combo)
+        combo.currentIndexChanged.connect(self._on_language)
+        self._lang = combo
+        lang_row.addStretch(1)
+        lang_row.addWidget(combo)
+        lay.addLayout(lang_row)
 
         lay.addStretch(1)
         tools = QHBoxLayout()
@@ -170,6 +185,13 @@ class SettingsWindow(Window):
         tools.addStretch(1)
         lay.addLayout(tools)
         return page
+
+    def _on_language(self, index):
+        lang = self._lang.itemData(index)
+        if lang == self.s.get("language"):
+            return
+        self.s["language"] = lang
+        self.language_changed.emit(lang)
 
     def _open_dir(self):
         if self._app is not None:
@@ -236,14 +258,6 @@ class SettingsWindow(Window):
 
     def _page_formats(self):
         page, lay = self._page()
-
-        lay.addWidget(QLabel(tr("Save folder"), self))
-        self._dir_edit = QLineEdit(self.s.get("save_dir", ""), self)
-        self._dir_edit.textChanged.connect(
-            lambda t: self.s.__setitem__("save_dir", t))
-        browse = QPushButton(tr("Browse..."), self)
-        browse.clicked.connect(self._pick_dir)
-        lay.addLayout(self._row(self._dir_edit, browse, stretch_last=False))
 
         fmt_row = QHBoxLayout()
         fmt_row.addWidget(QLabel(tr("Image format"), self))
@@ -314,7 +328,7 @@ class SettingsWindow(Window):
 
     def _page_updates(self):
         page, lay = self._page()
-        self._check("check_updates", tr("Check for updates on startup"), lay)
+        self._check("check_updates", tr("Notify about new versions"), lay)
 
         lay.addSpacing(theme.s(4))
         lay.addWidget(QLabel("%s: %s %s" % (tr("Current version"),
@@ -340,6 +354,16 @@ class SettingsWindow(Window):
         return page
 
     # --- обновления ------------------------------------------------------ #
+    def begin_update(self, info):
+        """Запуск установки с уже известным релизом — так окно открывается из
+        уведомления о новой версии и сразу качает, не проверяя повторно."""
+        self.tabs.set_index(3)
+        self._update_info = info
+        self._update_btn.setVisible(bool(info.get("download_url")))
+        self._update_status.setText("%s: %s" % (tr("Update available"),
+                                                info.get("version", "")))
+        self._do_update()
+
     def _do_check(self):
         self._check_btn.setEnabled(False)
         self._update_status.setText(tr("Checking..."))
