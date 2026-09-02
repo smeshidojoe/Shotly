@@ -117,5 +117,14 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
     ValueType: string; ValueName: "Shotly"; ValueData: """{app}\{#MyAppExeName}"""; \
     Flags: uninsdeletevalue; Tasks: startup
 
+; Автозапуск, включённый уже в самой программе, установщик не создавал — и без
+; этой строки запись пережила бы удаление, а Windows потом каждый раз пыталась
+; бы запустить стёртый exe. ValueType: none + dontcreatekey означают «при
+; установке ничего не делать», удаление значения происходит только при удалении
+; программы.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
+    ValueType: none; ValueName: "Shotly"; \
+    Flags: dontcreatekey uninsdeletevalue
+
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent

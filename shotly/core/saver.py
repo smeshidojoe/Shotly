@@ -3,6 +3,7 @@
 """
 
 import os
+import re
 import time
 
 from PySide6.QtGui import QGuiApplication
@@ -13,18 +14,82 @@ _EXT = {"png": "png", "jpg": "jpg", "bmp": "bmp"}
 # Qt называет формат JPEG, а расширение файла принято писать .jpg.
 _QT_FMT = {"png": "PNG", "jpg": "JPEG", "bmp": "BMP"}
 
+# Занятым считаем номер в любом из наших форматов: Screenshot_7.jpg должен
+# помешать выдать номер 7 файлу .png, иначе в папке окажутся два «седьмых».
+_SCAN_EXTS = {"png", "jpg", "jpeg", "bmp"}
 
-def build_name(settings, when=None):
-    """Имя файла без расширения по шаблону из настроек."""
-    tpl = settings.get("filename_template") or f"{APP_NAME}_%Y-%m-%d_%H-%M-%S"
+DEFAULT_TEMPLATE = "Screenshot_%n"
+
+# %n — порядковый номер, %03n — он же с ведущими нулями.
+_NUM_RE = re.compile(r"%(?:0(\d+))?n")
+# Место номера в уже развёрнутом шаблоне. Символ управляющий: в имени файла его
+# быть не может, поэтому спутать с настоящим текстом нельзя.
+_MARK = "\x01"
+
+_BAD_CHARS = r'\/:*?"<>|'
+
+
+def _expand(settings, when=None):
+    """Шаблон -> (имя с маркером номера, ширина номера). Маркера нет, если в
+    шаблоне не было %n."""
+    tpl = settings.get("filename_template") or DEFAULT_TEMPLATE
+
+    match = _NUM_RE.search(tpl)
+    width = int(match.group(1)) if (match and match.group(1)) else 0
+    if match:
+        # Номер в имени ровно один: второй превратил бы поиск свободного в
+        # перебор пар, а пользы никакой.
+        tpl = _NUM_RE.sub(_MARK, tpl, count=1)
+        tpl = _NUM_RE.sub("", tpl)
+
     try:
         name = time.strftime(tpl, time.localtime(when or time.time()))
     except (ValueError, TypeError):
-        name = time.strftime(f"{APP_NAME}_%Y-%m-%d_%H-%M-%S")
-    # Символы, запрещённые в именах файлов Windows.
-    for ch in r'\/:*?"<>|':
+        # Незнакомый код в шаблоне: не роняем сохранение, берём заводской.
+        name = time.strftime(DEFAULT_TEMPLATE.replace("%n", _MARK))
+        width = 0
+
+    for ch in _BAD_CHARS:                    # запрещённые в именах Windows
         name = name.replace(ch, "-")
-    return name.strip() or APP_NAME
+    return (name.strip() or APP_NAME), width
+
+
+def _free_number(folder, marked, width):
+    """Наименьший свободный номер в папке для имени с маркером.
+
+    Считаем от единицы, а не «последний + 1»: удалили Screenshot_134 — следующий
+    снимок займёт именно его место, и дыр в нумерации не остаётся.
+    """
+    head, _, tail = marked.partition(_MARK)
+    pattern = re.compile("%s(\\d+)%s$" % (re.escape(head), re.escape(tail)),
+                         re.IGNORECASE)
+    used = set()
+    try:
+        entries = os.listdir(folder)
+    except OSError:
+        entries = []
+    for entry in entries:
+        stem, ext = os.path.splitext(entry)
+        if ext[1:].lower() not in _SCAN_EXTS:
+            continue
+        found = pattern.match(stem)
+        if found:
+            used.add(int(found.group(1)))
+
+    number = 1
+    while number in used:
+        number += 1
+    return "%0*d" % (width, number) if width else str(number)
+
+
+def build_name(settings, when=None, folder=None):
+    """Имя файла без расширения по шаблону из настроек. folder нужен только для
+    шаблонов с %n — по нему ищется свободный номер."""
+    name, width = _expand(settings, when)
+    if _MARK not in name:
+        return name
+    folder = folder if folder is not None else (settings.get("save_dir") or "")
+    return name.replace(_MARK, _free_number(folder, name, width))
 
 
 def unique_path(folder, base, ext):
@@ -45,7 +110,8 @@ def default_path(settings):
         os.makedirs(folder, exist_ok=True)
     except OSError:
         folder = os.path.expanduser("~")
-    return unique_path(folder, build_name(settings), _EXT.get(fmt, "png"))
+    return unique_path(folder, build_name(settings, folder=folder),
+                       _EXT.get(fmt, "png"))
 
 
 def save_pixmap(pixmap, path, settings):

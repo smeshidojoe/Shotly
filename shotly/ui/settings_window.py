@@ -10,9 +10,9 @@ import threading
 import time
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton, QSlider,
-                               QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QSlider, QStackedWidget, QVBoxLayout, QWidget)
 
 from ..core import config, saver, updater
 from ..core.constants import APP_NAME, APP_VERSION
@@ -54,9 +54,8 @@ class _Downloader(QObject):
 
 class SettingsWindow(Window):
     applied = Signal(dict)
-    # Язык меняется на месте: владелец пересобирает окно на новом языке, потому
-    # что перевести полсотни уже созданных подписей по одной дороже, чем собрать
-    # окно заново (см. App._relanguage_settings).
+    # Язык меняется прямо в открытом окне: владелец переключает i18n и зовёт
+    # retranslate(). Пересоздавать окно нельзя — оно мигало бы на глазах.
     language_changed = Signal(str)
 
     def __init__(self, settings, app=None, parent=None):
@@ -66,6 +65,8 @@ class SettingsWindow(Window):
         self._update_info = None
         self._checker = None
         self._downloader = None
+        # [(виджет, английский ключ)] — что переписать при смене языка.
+        self._labels = []
 
         self.setFixedWidth(theme.s(520))
 
@@ -74,8 +75,8 @@ class SettingsWindow(Window):
                                 theme.s(16), theme.s(14))
         root.setSpacing(theme.s(12))
 
-        self.tabs = TabBar([tr("General"), tr("Hotkeys"),
-                            tr("Formats"), tr("Updates")], self)
+        self._tab_keys = ["General", "Hotkeys", "Formats", "Updates"]
+        self.tabs = TabBar([tr(k) for k in self._tab_keys], self)
         root.addWidget(self.tabs)
 
         self.stack = QStackedWidget(self)
@@ -89,10 +90,10 @@ class SettingsWindow(Window):
         root.addStretch(1)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        ok = QPushButton(tr("OK"), self)
+        ok = self._t(QPushButton(self), "OK")
         ok.setProperty("accent", True)
         ok.clicked.connect(self._accept)
-        cancel = QPushButton(tr("Cancel"), self)
+        cancel = self._t(QPushButton(self), "Cancel")
         cancel.clicked.connect(self.close)
         buttons.addWidget(cancel)
         buttons.addWidget(ok)
@@ -106,12 +107,33 @@ class SettingsWindow(Window):
     # ------------------------------------------------------------------ #
     #  Вспомогательное
     # ------------------------------------------------------------------ #
-    def _check(self, key, label, page_layout):
-        box = QCheckBox(label, self)
+    def _t(self, widget, key):
+        """Ставит подпись и запоминает виджет: при смене языка перепишем её."""
+        widget.setText(tr(key))
+        self._labels.append((widget, key))
+        return widget
+
+    def _check(self, key, label_key, page_layout):
+        box = self._t(QCheckBox(self), label_key)
         box.setChecked(bool(self.s.get(key)))
         box.toggled.connect(lambda on, k=key: self.s.__setitem__(k, bool(on)))
         page_layout.addWidget(box)
         return box
+
+    def retranslate(self):
+        """Перевод открытого окна: заголовок, вкладки и все запомненные подписи.
+        Динамические строки (пример имени, качество JPEG) пересчитываются, а
+        статус обновления сбрасывается — переводить чужой текст ошибки нечем."""
+        self.set_title(tr("Settings"))
+        self.tabs.set_titles([tr(k) for k in self._tab_keys])
+        for widget, key in self._labels:
+            widget.setText(tr(key))
+        self._sync_version_label()
+        self._on_quality(self._q_slider.value())
+        self._on_template(self._tpl.text())
+        self._disarm_reset()
+        self._update_status.setText("")
+        self._hotkey_warn.setText("")
 
     @staticmethod
     def _row(*widgets, stretch_last=True):
@@ -139,39 +161,36 @@ class SettingsWindow(Window):
     # ------------------------------------------------------------------ #
     def _page_general(self):
         page, lay = self._page()
-        self._check("autostart", tr("Launch at Windows startup"), lay)
-        self._check("notify", tr("Show notifications about copying and saving"), lay)
-        self._check("remember_selection", tr("Remember selection position"), lay)
-        self._check("capture_cursor", tr("Capture mouse cursor"), lay)
-        self._check("copy_after_save", tr("Copy to clipboard after saving"), lay)
+        self._check("autostart", "Launch at Windows startup", lay)
+        self._check("notify", "Show notifications about copying and saving", lay)
+        self._check("remember_selection", "Remember selection position", lay)
+        self._check("capture_cursor", "Capture mouse cursor", lay)
+        self._check("copy_after_save", "Copy to clipboard after saving", lay)
 
         lay.addSpacing(theme.s(6))
-        lay.addWidget(QLabel(tr("Save folder"), self))
+        lay.addWidget(self._t(QLabel(self), "Save folder"))
         self._dir_edit = QLineEdit(self.s.get("save_dir", ""), self)
         self._dir_edit.textChanged.connect(
             lambda t: self.s.__setitem__("save_dir", t))
-        browse = QPushButton(tr("Browse..."), self)
+        browse = self._t(QPushButton(self), "Browse...")
         browse.clicked.connect(self._pick_dir)
         lay.addLayout(self._row(self._dir_edit, browse, stretch_last=False))
 
         lay.addSpacing(theme.s(2))
-        lang_row = QHBoxLayout()
-        lang_row.addWidget(QLabel(tr("Language"), self))
+        lay.addWidget(self._t(QLabel(self), "Language"))
         combo = QComboBox(self)
         combo.addItem("Русский", "ru")
         combo.addItem("English", "en")
         combo.setCurrentIndex(0 if self.s.get("language") == "ru" else 1)
         combo.currentIndexChanged.connect(self._on_language)
         self._lang = combo
-        lang_row.addStretch(1)
-        lang_row.addWidget(combo)
-        lay.addLayout(lang_row)
+        lay.addWidget(combo)
 
         lay.addStretch(1)
         tools = QHBoxLayout()
-        open_dir = QPushButton(tr("Open screenshots folder"), self)
+        open_dir = self._t(QPushButton(self), "Open screenshots folder")
         open_dir.clicked.connect(self._open_dir)
-        self._reset_btn = QPushButton(tr("Reset settings"), self)
+        self._reset_btn = self._t(QPushButton(self), "Reset settings")
         self._reset_btn.clicked.connect(self._on_reset)
         # Сброс — необратимое действие, поэтому двухступенчатый: первый клик
         # взводит кнопку, второй выполняет. Отдельного окна с вопросом ради
@@ -218,12 +237,12 @@ class SettingsWindow(Window):
         page, lay = self._page()
         self._hotkey_rows = []
         for key_flag, key_combo, title in (
-                ("hotkey_enabled", "hotkey", tr("Main hotkey")),
+                ("hotkey_enabled", "hotkey", "Main hotkey"),
                 ("hotkey_fullsave_on", "hotkey_fullsave",
-                 tr("Quick save of the whole screen")),
+                 "Quick save of the whole screen"),
                 ("hotkey_fullcopy_on", "hotkey_fullcopy",
-                 tr("Quick copy of the whole screen"))):
-            box = QCheckBox(title, self)
+                 "Quick copy of the whole screen")):
+            box = self._t(QCheckBox(self), title)
             box.setChecked(bool(self.s.get(key_flag)))
             edit = HotkeyEdit(self.s.get(key_combo, ""), self)
             edit.setFixedWidth(theme.s(190))
@@ -260,7 +279,7 @@ class SettingsWindow(Window):
         page, lay = self._page()
 
         fmt_row = QHBoxLayout()
-        fmt_row.addWidget(QLabel(tr("Image format"), self))
+        fmt_row.addWidget(self._t(QLabel(self), "Image format"))
         self._fmt = QComboBox(self)
         for name, value in (("PNG", "png"), ("JPG", "jpg"), ("BMP", "bmp")):
             self._fmt.addItem(name, value)
@@ -283,16 +302,19 @@ class SettingsWindow(Window):
         lay.addLayout(q_row)
         self._sync_quality_enabled()
 
-        lay.addWidget(QLabel(tr("File name template"), self))
+        lay.addWidget(self._t(QLabel(self), "File name template"))
         self._tpl = QLineEdit(self.s.get("filename_template", ""), self)
         self._tpl.textChanged.connect(self._on_template)
         lay.addWidget(self._tpl)
         self._tpl_example = QLabel("", self)
         self._tpl_example.setProperty("dim", True)
         lay.addWidget(self._tpl_example)
+        hint = self._t(QLabel(self), "%n — the first free number in the folder")
+        hint.setProperty("dim", True)
+        lay.addWidget(hint)
         self._on_template(self._tpl.text())
 
-        self._check("ask_where_to_save", tr("Ask where to save every time"), lay)
+        self._check("ask_where_to_save", "Ask where to save every time", lay)
         lay.addStretch(1)
         return page
 
@@ -321,23 +343,25 @@ class SettingsWindow(Window):
         self.s["filename_template"] = text
         probe = dict(self.s)
         probe["filename_template"] = text
-        name = saver.build_name(probe, time.time())
+        name = saver.build_name(probe, time.time(),
+                                folder=self.s.get("save_dir", ""))
         ext = {"png": "png", "jpg": "jpg", "bmp": "bmp"}.get(
             self.s.get("image_format", "png"), "png")
         self._tpl_example.setText("%s: %s.%s" % (tr("Example"), name, ext))
 
     def _page_updates(self):
         page, lay = self._page()
-        self._check("check_updates", tr("Notify about new versions"), lay)
+        self._check("check_updates", "Notify about new versions", lay)
 
         lay.addSpacing(theme.s(4))
-        lay.addWidget(QLabel("%s: %s %s" % (tr("Current version"),
-                                            APP_NAME, APP_VERSION), self))
+        self._version_label = QLabel(self)
+        self._sync_version_label()
+        lay.addWidget(self._version_label)
 
         row = QHBoxLayout()
-        self._check_btn = QPushButton(tr("Check now"), self)
+        self._check_btn = self._t(QPushButton(self), "Check now")
         self._check_btn.clicked.connect(self._do_check)
-        self._update_btn = QPushButton(tr("Install and restart"), self)
+        self._update_btn = self._t(QPushButton(self), "Install and restart")
         self._update_btn.setProperty("accent", True)
         self._update_btn.clicked.connect(self._do_update)
         self._update_btn.hide()
@@ -352,6 +376,10 @@ class SettingsWindow(Window):
         lay.addWidget(self._update_status)
         lay.addStretch(1)
         return page
+
+    def _sync_version_label(self):
+        self._version_label.setText("%s: %s %s" % (tr("Current version"),
+                                                   APP_NAME, APP_VERSION))
 
     # --- обновления ------------------------------------------------------ #
     def begin_update(self, info):
@@ -408,10 +436,15 @@ class SettingsWindow(Window):
             self._update_status.setText("%s: %s" % (tr("Update failed"), error))
             return
         if updater.restart_to_update():
-            # Помощник ждёт, пока освободится exe: выходим немедленно и жёстко,
-            # иначе Qt успеет ещё что-нибудь записать в файлы программы.
+            # Помощник ждёт, пока освободится exe. Настройки сохраняем через
+            # владельца и выходим штатно — жёсткий os._exit оставлял за собой
+            # ругань Qt на недоубитые потоки.
             self.applied.emit(self.s)
-            os._exit(0)
+            if self._app is not None:
+                self._app.quit_for_update()
+            else:
+                QApplication.instance().quit()
+            return
         self._update_btn.setEnabled(True)
         self._update_status.setText(tr("Update failed"))
 

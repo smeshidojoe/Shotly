@@ -51,6 +51,8 @@ _RU = {
     "Image format":                 "Формат изображения",
     "JPEG quality":                 "Качество JPEG",
     "File name template":           "Шаблон имени файла",
+    "%n — the first free number in the folder":
+        "%n — первый свободный номер в папке",
     "Ask where to save every time": "Спрашивать путь при каждом сохранении",
     "Example":                      "Пример",
     "Save screenshot":              "Сохранить скриншот",

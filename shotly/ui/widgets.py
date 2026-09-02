@@ -39,6 +39,12 @@ class Window(QWidget):
         self._close.clicked.connect(self.close)
         self.setStyleSheet(theme.stylesheet())
 
+    def set_title(self, title):
+        """Смена языка на лету: заголовок перерисовывается, окно не пересоздаётся."""
+        self._title = title
+        self.setWindowTitle(title)
+        self.update()
+
     def resizeEvent(self, e):
         m = theme.s(6)
         self._close.move(self.width() - self._close.width() - m,
@@ -161,6 +167,15 @@ class TabBar(QWidget):
 
     def index(self):
         return self._index
+
+    def set_titles(self, titles):
+        """Новые подписи вкладок (смена языка). Ширина ячейки пересчитывается:
+        английские слова короче русских, и «пилюля» иначе не совпала бы с текстом."""
+        self._titles = list(titles)
+        fm = QFontMetrics(self._font)
+        self._cell = max(fm.horizontalAdvance(t) for t in self._titles) + theme.s(26)
+        self.updateGeometry()
+        self.update()
 
     def set_index(self, i):
         i = max(0, min(int(i), len(self._titles) - 1))

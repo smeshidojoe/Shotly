@@ -36,10 +36,21 @@ class App(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        had_config = os.path.isfile(CONFIG_PATH)
         self.settings = config.load()
         i18n.set_language(self.settings.get("language", "ru"))
+        if not had_config:
+            # Первый запуск: автозапуск мог прописать установщик галочкой в
+            # мастере. Принимаем реестр за исходное состояние — иначе
+            # sync_autostart тут же стёр бы то, что пользователь выбрал.
+            self.settings["autostart"] = autostart.is_enabled()
+        # Пишем сразу на старте: при первом запуске файл появляется до того, как
+        # пользователь что-то поменял, а после обновления программы в него
+        # дописываются ключи, которых в старой версии не было.
+        config.save(self.settings)
 
         self.tray = None
+        self._resetting = False           # идёт сброс: конфиг писать больше нельзя
         self._overlay = None
         self._settings_win = None
         self._about_win = None
@@ -199,22 +210,14 @@ class App(QObject):
             self._settings_win = None
 
     def _relanguage_settings(self, lang):
-        """Смена языка на месте: собираем окно заново, сохранив несохранённые
-        правки, вкладку и положение — иначе надпись «Настройки» и полсотни
-        подписей остались бы на прежнем языке до следующего открытия."""
-        old = self._settings_win
-        if old is None:
-            return
-        draft, tab, pos = dict(old.s), old.tabs.index(), old.pos()
+        """Смена языка прямо в открытом окне: переключаем словарь и просим окно
+        переписать подписи. Пересоздание окна выглядело бы как мигание —
+        настройки исчезали и появлялись бы на каждом переключении."""
         i18n.set_language(lang)
         if self.tray is not None:
             self.tray.retranslate()
-        old.close()
-        win = self._build_settings(draft)
-        self._settings_win = win
-        win.move(pos)
-        win.tabs.set_index(tab)
-        self._show(win)
+        if self._settings_win is not None:
+            self._settings_win.retranslate()
 
     @staticmethod
     def _show(win):
@@ -240,13 +243,13 @@ class App(QObject):
     #  Настройки
     # ------------------------------------------------------------------ #
     def apply_settings(self, new_settings):
-        old = dict(self.settings)
         self.settings.update(new_settings)
         config.save(self.settings)
 
         i18n.set_language(self.settings.get("language", "ru"))
-        if self.settings.get("autostart") != old.get("autostart"):
-            autostart.set_enabled(bool(self.settings.get("autostart")))
+        # Пишем реестр всегда, а не только при смене галочки: так чинится
+        # рассинхрон, если запись удалили или испортили снаружи.
+        autostart.set_enabled(bool(self.settings.get("autostart")))
         self.hotkeys.apply(self.settings)
         if self.tray is not None:
             self.tray.retranslate()
@@ -255,17 +258,16 @@ class App(QObject):
         """Сброс к заводским: удаляем конфиг и перезапускаемся. Перезапуск нужен
         не для красоты — язык, горячие клавиши и автозапуск проще поднять с нуля,
         чем переигрывать по одному."""
-        self.hotkeys.stop()
+        # Флаг ставим ДО удаления файла: любое сохранение после этого момента
+        # (закрытие оверлея, выход) воскресило бы конфиг со старыми значениями.
+        self._resetting = True
         try:
             os.remove(CONFIG_PATH)
         except OSError:
             pass
         autostart.set_enabled(False)
-        if updater.relaunch_app():
-            # Помощник ждёт выхода процесса: уходим немедленно, иначе Qt успеет
-            # записать настройки обратно на диск.
-            os._exit(0)
-        QTimer.singleShot(0, QApplication.instance().quit)
+        updater.relaunch_app()
+        self._shutdown(save=False)
 
     def open_save_dir(self):
         folder = self.settings.get("save_dir") or os.path.expanduser("~")
@@ -276,13 +278,17 @@ class App(QObject):
             pass
 
     def sync_autostart(self):
-        """Приводит реестр к настройке при запуске: пользователь мог убрать
-        программу из автозапуска сторонним средством."""
-        want = bool(self.settings.get("autostart"))
-        if autostart.is_enabled() != want:
-            autostart.set_enabled(want)
+        """Настройка — источник истины: на старте приводим реестр к галочке.
+
+        Выключено — запись удаляется (чинит «застрявший» автозапуск от прошлой
+        установки); включено — значение перезаписывается актуальным путём к exe,
+        иначе после переустановки в другую папку автозапуск указывал бы в
+        пустоту."""
+        autostart.set_enabled(bool(self.settings.get("autostart")))
 
     def _save_settings(self):
+        if self._resetting:
+            return
         config.save(self.settings)
 
     # ------------------------------------------------------------------ #
@@ -347,8 +353,27 @@ class App(QObject):
         toast.show(text, subtext, icon_name, open_path, on_click)
 
     def quit(self):
+        self._shutdown()
+
+    def quit_for_update(self):
+        """Выход перед подменой exe: помощник уже запущен и ждёт, когда файл
+        освободится."""
+        self._shutdown()
+
+    def _shutdown(self, save=True):
+        """Штатное завершение. Раньше здесь был os._exit — он убивал процесс, не
+        дожидаясь потоков, и Qt на выходе ругался «QThreadStorage: entry
+        destroyed before end of thread». Теперь сначала снимаем горячие клавиши
+        и закрываем окна, потом даём циклу событий закончиться самому."""
         self.hotkeys.stop()
-        self._save_settings()
-        if self._overlay is not None:
-            self._overlay.close()
+        if self._update_timer is not None:
+            self._update_timer.stop()
+        if save:
+            self._save_settings()
+        overlay, self._overlay = self._overlay, None
+        if overlay is not None:
+            overlay.close()
+        for win in (self._settings_win, self._about_win):
+            if win is not None:
+                win.close()
         QTimer.singleShot(0, QApplication.instance().quit)

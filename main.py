@@ -80,11 +80,11 @@ def main():
     _set_app_identity(app)
     app.setQuitOnLastWindowClosed(False)      # программа живёт в трее
 
-    # Второй запуск не плодит иконку в трее, а просит первый снять скриншот:
-    # иначе повторный клик по ярлыку выглядел бы как «ничего не произошло».
-    instance = SingleInstance(app)
+    # Второй запуск молча уходит: программа уже сидит в трее. Съёмку он не
+    # запускает — иначе автозапуск вместе с кликом по ярлыку открывал бы оверлей
+    # сам по себе, при каждом старте Windows.
+    instance = SingleInstance()
     if not instance.is_first():
-        SingleInstance.wake_running()
         return 0
 
     # Страховка: остался распакованный апдейт — применяем, что не заблокировано.
@@ -98,10 +98,6 @@ def main():
     tray = Tray(controller)
     controller.tray = tray
     tray.run()
-
-    instance.woken.connect(controller.start_capture)
-    instance.listen()
-    app.aboutToQuit.connect(instance.close)
 
     _install_console_interrupt(app, controller)
 

@@ -30,9 +30,6 @@ APP_DIR = os.path.join(_BASE, APP_NAME)
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 CRASH_LOG   = os.path.join(APP_DIR, "crash.log")
 
-# Первый ли это запуск — снимаем до того, как что-либо создаст APP_DIR.
-IS_FIRST_RUN = not os.path.isdir(APP_DIR)
-
 # Куда сохранять по умолчанию: ~/Pictures/Shotly.
 def default_save_dir():
     pics = os.path.join(os.path.expanduser("~"), "Pictures")

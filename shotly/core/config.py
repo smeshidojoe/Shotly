@@ -30,8 +30,9 @@ def defaults():
         "save_dir":            default_save_dir(),
         "image_format":        "png",      # png | jpg | bmp
         "jpeg_quality":        92,
-        # Шаблон имени файла: коды strftime + %n (порядковый номер за секунду).
-        "filename_template":   "Shotly_%Y-%m-%d_%H-%M-%S",
+        # Шаблон имени файла: коды strftime плюс %n — наименьший свободный
+        # номер в папке (%03n — с ведущими нулями).
+        "filename_template":   "Screenshot_%n",
         # Спрашивать путь каждый раз (диалог сохранения) вместо тихой записи.
         "ask_where_to_save":   True,
 
@@ -117,24 +118,55 @@ def validate(data):
     return data
 
 
+# Битый конфиг не выбрасываем молча: сдвигаем сюда, вдруг пригодится.
+BAD_CONFIG_PATH = CONFIG_PATH + ".bad"
+
+
 def load():
-    """Читает настройки с диска, дополняя отсутствующие ключи дефолтами."""
+    """Читает настройки с диска, дополняя отсутствующие ключи дефолтами.
+
+    Файла нет (первый запуск) — берём дефолты. Файл битый — отодвигаем его в
+    сторону и тоже берём дефолты: молча продолжать с обломками нельзя, а
+    падать из-за одной лишней запятой в JSON тем более."""
     data = defaults()
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             saved = json.load(f)
         if isinstance(saved, dict):
             data.update(saved)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except FileNotFoundError:
+        pass
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        try:
+            os.replace(CONFIG_PATH, BAD_CONFIG_PATH)
+        except OSError:
+            pass
+    except OSError:
         pass
     return validate(data)
 
 
 def save(settings):
-    """Сохраняет настройки на диск (тихо, без падений на ошибках ФС)."""
+    """Сохраняет настройки на диск. True при успехе.
+
+    Пишем во временный файл и подменяем им настоящий: os.replace на одном томе
+    атомарен, поэтому выключение питания посреди записи оставит либо старый
+    конфиг, либо новый — но не обрезанный. Раньше писали прямо в файл, и
+    прерванная запись превращала настройки в мусор."""
+    tmp = CONFIG_PATH + ".tmp"
     try:
         os.makedirs(APP_DIR, exist_ok=True)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2, ensure_ascii=False)
-    except OSError:
-        pass
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, CONFIG_PATH)
+        return True
+    except (OSError, ValueError, TypeError):
+        # ValueError/TypeError — кривой путь или несериализуемое значение.
+        # Недописанный временный файл убираем, иначе он остался бы навсегда.
+        try:
+            os.remove(tmp)
+        except (OSError, ValueError):
+            pass
+        return False
