@@ -20,7 +20,7 @@
 [Setup]
 ; Первая скобка удвоена не по ошибке: одиночная «{» в Inno Setup начинает
 ; константу, и AppId с GUID без экранирования не компилируется.
-AppId={8707BE45-788D-41B5-8556-9798919C1169}
+AppId={{8707BE45-788D-41B5-8556-9798919C1169}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
