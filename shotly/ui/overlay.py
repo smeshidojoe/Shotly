@@ -152,11 +152,15 @@ class Overlay(QWidget):
         p.end()
 
     def _paint_shapes(self, p, sel):
+        """Фигуры рисуются по всему экрану, без обрезки по рамке — как в
+        Lightshot: стрелку удобно вести к объекту снаружи, а обводку замыкать
+        вокруг выделения. В файл всё равно уедет только выделенная область
+        (см. result_pixmap)."""
         items = list(self.shapes)
         if self._draft is not None:
             items.append(self._draft)
         if items:
-            shapes_mod.draw_all(p, items, QRectF(sel))
+            shapes_mod.draw_all(p, items)
 
     def _paint_frame(self, p, sel):
         """Рамка «бегущими муравьями»: сплошная чёрная линия, поверх неё белый
@@ -261,14 +265,18 @@ class Overlay(QWidget):
             self._hide_panels()
             return
 
+        # Выбран инструмент — рисуем в любой точке экрана, хоть за рамкой.
+        # Новое выделение в этом режиме не начинаем: инструмент сначала нужно
+        # отключить (повторный клик по кнопке или Esc).
+        if self._tool and self._has_selection:
+            self._start_draw(pos)
+            return
+
         sel = self._sel_norm()
         if self._has_selection and sel.contains(pos):
-            if self._tool:
-                self._start_draw(pos)
-            else:
-                self._mode = _MOVING
-                self._grab_offset = pos - sel.topLeft()
-                self._hide_panels()
+            self._mode = _MOVING
+            self._grab_offset = pos - sel.topLeft()
+            self._hide_panels()
             return
 
         # Клик вне выделения — начинаем новое.
@@ -330,8 +338,9 @@ class Overlay(QWidget):
         handle = self._handle_at(pos)
         if handle:
             self.setCursor(_HANDLE_CURSORS[handle])
-        elif self._has_selection and self._sel_norm().contains(pos):
-            self.setCursor(Qt.CrossCursor if self._tool else Qt.SizeAllCursor)
+        elif (not self._tool and self._has_selection
+                and self._sel_norm().contains(pos)):
+            self.setCursor(Qt.SizeAllCursor)
         else:
             self.setCursor(Qt.CrossCursor)
 
@@ -365,13 +374,14 @@ class Overlay(QWidget):
             return
         self._draft = shapes_mod.create(self._tool, self._color, self._width, pos)
         self._mode = _DRAWING
-        self._hide_panels()
+        # Панели не прячем: в Lightshot они на месте всё время рисования, а
+        # мигание на каждый штрих раздражает сильнее, чем закрытый ими угол.
+        self._close_popup()
 
     def _finish_draw(self):
         if self._draft is not None and not self._draft.is_empty():
             self.shapes.append(self._draft)
         self._draft = None
-        self._show_panels()
         self.tools.set_undo_enabled(bool(self.shapes))
 
     def undo(self):

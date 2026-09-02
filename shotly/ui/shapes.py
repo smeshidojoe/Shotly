@@ -211,7 +211,8 @@ def create(kind, color, width, start):
 
 
 def draw_all(painter, shapes, clip=None):
-    """Рисует список фигур; clip — область в тех же координатах (снимка)."""
+    """Рисует список фигур. clip (в координатах снимка) нужен только при сборке
+    результата: на экране фигуры не обрезаются, а в файл идёт лишь выделение."""
     painter.save()
     try:
         painter.setRenderHint(QPainter.Antialiasing, True)
