@@ -35,9 +35,19 @@ class Window(QWidget):
         self._title_font = QFont("Segoe UI")
         self._title_font.setPixelSize(theme.s(13))
 
+        self._locked = False             # операция, которую нельзя прерывать
         self._close = _CloseButton(self)
         self._close.clicked.connect(self.close)
         self.setStyleSheet(theme.stylesheet())
+
+    def set_locked(self, on):
+        """Запирает окно на время операции, которую нельзя обрывать (загрузка
+        обновления). Крестик прячется, Esc и закрытие не работают."""
+        self._locked = bool(on)
+        self._close.setVisible(not self._locked)
+
+    def is_locked(self):
+        return self._locked
 
     def set_title(self, title):
         """Смена языка на лету: заголовок перерисовывается, окно не пересоздаётся."""
@@ -86,11 +96,15 @@ class Window(QWidget):
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
-            self.close()
+            if not self._locked:
+                self.close()
             return
         super().keyPressEvent(e)
 
     def closeEvent(self, e):
+        if self._locked:
+            e.ignore()               # закрытие оборвало бы операцию
+            return
         self.closed.emit()
         super().closeEvent(e)
 

@@ -18,6 +18,7 @@ from ..core import config, saver, updater
 from ..core.constants import APP_NAME, APP_VERSION
 from ..core.i18n import tr
 from . import theme
+from .busy import BusyOverlay
 from .widgets import HotkeyEdit, TabBar, Window
 
 
@@ -65,6 +66,7 @@ class SettingsWindow(Window):
         self._update_info = None
         self._checker = None
         self._downloader = None
+        self._busy = None                # блокирующий оверлей на время загрузки
         # [(виджет, английский ключ)] — что переписать при смене языка.
         self._labels = []
 
@@ -423,19 +425,45 @@ class SettingsWindow(Window):
             return
         self._update_btn.setEnabled(False)
         self._update_status.setText(tr("Downloading..."))
+
+        # Окно запирается на время загрузки: закрытое посреди скачивания, оно
+        # оборвало бы её, а сигналы воркера прилетели бы в удалённый объект.
+        self._busy = BusyOverlay(self, tr("Downloading..."))
+        self._busy.set_progress(0.0)
+        self._busy.show()
+        self._busy.raise_()
+        self.set_locked(True)
+
         self._downloader = _Downloader(self._update_info.get("download_url"))
-        self._downloader.progress.connect(
-            lambda f: self._update_status.setText("%s %d%%" % (tr("Downloading..."),
-                                                               int(f * 100))))
+        self._downloader.progress.connect(self._on_download_progress)
         self._downloader.done.connect(self._on_download_done)
         self._downloader.run()
 
+    def _on_download_progress(self, frac):
+        self._update_status.setText("%s %d%%" % (tr("Downloading..."),
+                                                 int(frac * 100)))
+        if self._busy is not None:
+            self._busy.set_progress(frac)
+
+    def _release_lock(self):
+        self.set_locked(False)
+        busy, self._busy = self._busy, None
+        if busy is not None:
+            busy.close_overlay()
+
     def _on_download_done(self, ok, error):
         if not ok:
+            self._release_lock()
             self._update_btn.setEnabled(True)
             self._update_status.setText("%s: %s" % (tr("Update failed"), error))
             return
+        if self._busy is not None:
+            # Дальше идёт подмена exe и перезапуск: окно так и остаётся запертым,
+            # пользователю нечего тут отменять.
+            self._busy.set_title(tr("Install and restart"))
+            self._busy.set_progress(1.0)
         if updater.restart_to_update():
+            self.set_locked(False)         # иначе закрыть окно на выходе не выйдет
             # Помощник ждёт, пока освободится exe. Настройки сохраняем через
             # владельца и выходим штатно — жёсткий os._exit оставлял за собой
             # ругань Qt на недоубитые потоки.
@@ -445,6 +473,7 @@ class SettingsWindow(Window):
             else:
                 QApplication.instance().quit()
             return
+        self._release_lock()
         self._update_btn.setEnabled(True)
         self._update_status.setText(tr("Update failed"))
 
