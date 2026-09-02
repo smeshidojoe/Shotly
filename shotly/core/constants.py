@@ -2,7 +2,7 @@ import os
 import sys
 
 APP_NAME    = "Shotly"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.3"
 
 GITHUB_REPO   = "SmeshidoJoe/Shotly"
 DEVELOPER_URL = "https://github.com/SmeshidoJoe"
