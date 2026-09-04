@@ -50,6 +50,21 @@ def _is_cloaked(hwnd):
     return res == 0 and value.value != 0
 
 
+def outer_rect(hwnd):
+    """Прямоугольник окна вместе с невидимыми полями Aero — в таком размере
+    PrintWindow рисует окно, и по нему считается смещение видимой части."""
+    rect = wintypes.RECT()
+    if not _user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+        return None
+    return QRect(rect.left, rect.top,
+                 rect.right - rect.left, rect.bottom - rect.top)
+
+
+def frame_rect(hwnd):
+    """Границы окна как их видит пользователь (без невидимых полей)."""
+    return _frame_rect(hwnd)
+
+
 def _frame_rect(hwnd):
     """Границы окна как их видит пользователь. None — окно нам не подходит."""
     rect = wintypes.RECT()

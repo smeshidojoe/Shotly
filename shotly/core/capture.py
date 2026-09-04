@@ -18,6 +18,13 @@ _SM = {"x": 76, "y": 77, "w": 78, "h": 79}     # SM_*VIRTUALSCREEN
 _CAPTUREBLT = 0x40000000                        # берёт и слоистые окна
 _DI_NORMAL = 0x0003
 
+# PrintWindow: рисовать всё содержимое, включая нарисованное через DWM. Без
+# этого флага окна на аппаратном ускорении (браузеры, Electron) выходят пустыми.
+_PW_RENDERFULLCONTENT = 0x00000002
+
+# Сколько точек проверяем, чтобы отличить настоящий кадр от чёрного прямоугольника.
+_PROBE_STEPS = 8
+
 
 def virtual_rect():
     """Прямоугольник всего рабочего стола (объединение мониторов), в пикселях."""
@@ -119,6 +126,93 @@ def _draw_cursor(win32gui, hdc, vx, vy):
                     win32gui.DeleteObject(hbm)
             except Exception:
                 pass
+
+
+def grab_window(hwnd):
+    """Снимок ОДНОГО окна без того, что лежит поверх него.
+
+    Окно рисует себя само (PrintWindow), поэтому перекрывающие окна в кадр не
+    попадают — вырезка из общего снимка экрана так не умеет. Возвращает
+    (QPixmap, QRect видимых границ) или None: у окон с чужими правами и у части
+    полноэкранного ускоренного вывода PrintWindow отдаёт пустоту, и вызывающему
+    надо откатиться на общий снимок.
+    """
+    try:
+        import win32gui
+        import win32ui
+    except Exception:
+        return None
+
+    from . import windows as win_utils
+
+    outer = win_utils.outer_rect(hwnd)
+    frame = win_utils.frame_rect(hwnd)
+    if outer is None or frame is None or outer.isEmpty():
+        return None
+
+    src_dc = mem_dc = bmp = None
+    hwnd_dc = win32gui.GetWindowDC(hwnd)
+    try:
+        src_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+        mem_dc = src_dc.CreateCompatibleDC()
+        bmp = win32ui.CreateBitmap()
+        bmp.CreateCompatibleBitmap(src_dc, outer.width(), outer.height())
+        mem_dc.SelectObject(bmp)
+
+        import ctypes
+        ok = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(),
+                                              _PW_RENDERFULLCONTENT)
+        if not ok:
+            return None
+
+        bits = bmp.GetBitmapBits(True)
+        img = QImage(bits, outer.width(), outer.height(),
+                     QImage.Format_RGB32).copy()
+    except Exception:
+        return None
+    finally:
+        try:
+            if bmp is not None:
+                win32gui.DeleteObject(bmp.GetHandle())
+        except Exception:
+            pass
+        for dc in (mem_dc, src_dc):
+            try:
+                if dc is not None:
+                    dc.DeleteDC()
+            except Exception:
+                pass
+        try:
+            win32gui.ReleaseDC(hwnd, hwnd_dc)
+        except Exception:
+            pass
+
+    if _looks_blank(img):
+        return None
+
+    # Невидимые поля Aero: PrintWindow рисует окно целиком, а показать надо ту
+    # же область, которую подсвечивала рамка.
+    inner = QRect(frame.x() - outer.x(), frame.y() - outer.y(),
+                  frame.width(), frame.height())
+    inner = inner.intersected(QRect(0, 0, img.width(), img.height()))
+    if inner.isEmpty():
+        return None
+    return QPixmap.fromImage(img.copy(inner)), QRect(frame)
+
+
+def _looks_blank(img):
+    """Полностью чёрный кадр — признак того, что PrintWindow ничего не нарисовал.
+    Проверяем сеткой точек: перебирать миллионы пикселей ради этого незачем."""
+    w, h = img.width(), img.height()
+    if w < 2 or h < 2:
+        return True
+    for i in range(_PROBE_STEPS):
+        for j in range(_PROBE_STEPS):
+            x = min(w - 1, w * i // _PROBE_STEPS)
+            y = min(h - 1, h * j // _PROBE_STEPS)
+            if img.pixel(x, y) & 0x00FFFFFF:
+                return False
+    return True
 
 
 def _grab_qt():

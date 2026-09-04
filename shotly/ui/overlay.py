@@ -12,6 +12,7 @@ from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import QLineEdit, QWidget
 
+from ..core import capture
 from ..core import windows as win_utils
 from ..core.constants import DIM_ALPHA, HANDLE_SIZE
 from . import shapes as shapes_mod
@@ -84,6 +85,7 @@ class Overlay(QWidget):
         self._windows = [(hwnd, QRect(rect).translated(-origin))
                          for hwnd, rect in (windows or ())]
         self._hover_rect = None
+        self._hover_hwnd = None
 
         self.shapes = []
         self._draft = None
@@ -341,8 +343,15 @@ class Overlay(QWidget):
         мешала бы возиться с рамкой."""
         if not self._highlight or self._has_selection or self._tool:
             self._hover_rect = None
+            self._hover_hwnd = None
             return
-        self._hover_rect = win_utils.window_at(pos, self._windows)
+        self._hover_hwnd, self._hover_rect = self._window_at(pos)
+
+    def _window_at(self, pos):
+        for hwnd, rect in self._windows:
+            if rect.contains(pos):
+                return hwnd, rect
+        return None, None
 
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.LeftButton:
@@ -373,13 +382,15 @@ class Overlay(QWidget):
 
         # Пустой экран: двойной клик по подсвеченному окну берёт его целиком.
         if not self._has_selection and self._hover_rect is not None:
-            self.select_rect(self._hover_rect)
+            self.select_rect(self._hover_rect, self._hover_hwnd)
 
-    def select_rect(self, rect):
+    def select_rect(self, rect, hwnd=None):
         """Ставит рамку по готовому прямоугольнику — так снимается целое окно."""
         rect = QRect(rect).intersected(self.rect())
         if rect.width() < 4 or rect.height() < 4:
             return
+        if hwnd is not None:
+            self._repaint_window(hwnd)
         self.selection = rect
         self._has_selection = True
         self._hover_rect = None
@@ -591,6 +602,25 @@ class Overlay(QWidget):
         self._cancel_text()
         self._hide_panels()
         self.update()
+
+    def _repaint_window(self, hwnd):
+        """Просит окно нарисовать себя заново и вклеивает результат в снимок.
+
+        Иначе в кадр попадёт всё, что лежало поверх окна в момент съёмки:
+        общий снимок экрана видит только верхний слой. Не получилось (окно с
+        чужими правами, ускоренный вывод) — молча остаёмся с тем, что сняли.
+        """
+        shot = capture.grab_window(hwnd)
+        if shot is None:
+            return False
+        pixmap, frame = shot
+        target = QRect(frame).translated(-self._origin)
+        painter = QPainter(self._shot)
+        try:
+            painter.drawPixmap(target.topLeft(), pixmap)
+        finally:
+            painter.end()
+        return True
 
     # ------------------------------------------------------------------ #
     #  Клавиатура
