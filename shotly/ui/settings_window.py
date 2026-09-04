@@ -168,6 +168,9 @@ class SettingsWindow(Window):
         self._check("remember_selection", "Remember selection position", lay)
         self._check("capture_cursor", "Capture mouse cursor", lay)
         self._check("copy_after_save", "Copy to clipboard after saving", lay)
+        self._check("highlight_windows", "Highlight windows under the cursor", lay)
+        self._check("crosshair_cursor", "Crosshair instead of the mouse pointer",
+                    lay)
 
         lay.addSpacing(theme.s(6))
         lay.addWidget(self._t(QLabel(self), "Save folder"))

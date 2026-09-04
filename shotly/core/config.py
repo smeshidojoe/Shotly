@@ -15,6 +15,10 @@ def defaults():
         "remember_selection":  False,
         # Рисовать курсор мыши в кадре.
         "capture_cursor":      False,
+        # Перекрестие вместо системного курсора при выборе области.
+        "crosshair_cursor":    False,
+        # Подсвечивать окно под курсором, пока область не выбрана.
+        "highlight_windows":   True,
         # Копировать в буфер сразу после сохранения файла.
         "copy_after_save":     False,
 

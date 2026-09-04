@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QRect, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from .core import autostart, capture, config, i18n, saver, updater
+from .core import windows as win_utils
 from .core.constants import CONFIG_PATH
 from .core.hotkey import HotkeyManager
 from .core.i18n import tr
@@ -88,8 +89,12 @@ class App(QObject):
             self._toast(tr("Nothing to capture"), icon_name="info")
             return
 
-        origin = capture.virtual_rect().topLeft()
-        overlay = Overlay(shot, origin, self.settings)
+        rect = capture.virtual_rect()
+        # Список окон снимаем здесь, пока оверлея ещё нет: он сам станет верхним
+        # окном и закрыл бы собой всё остальное.
+        wins = (win_utils.list_windows(rect)
+                if self.settings.get("highlight_windows", True) else ())
+        overlay = Overlay(shot, rect.topLeft(), self.settings, wins)
         overlay.copy_requested.connect(self._on_copy)
         overlay.save_requested.connect(self._on_save)
         overlay.print_requested.connect(self._on_print)

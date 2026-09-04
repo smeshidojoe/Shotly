@@ -12,6 +12,7 @@ from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import QLineEdit, QWidget
 
+from ..core import windows as win_utils
 from ..core.constants import DIM_ALPHA, HANDLE_SIZE
 from . import shapes as shapes_mod
 from . import theme
@@ -49,7 +50,7 @@ class Overlay(QWidget):
     # Закрыт: (последняя рамка выделения в координатах экрана | None)
     closed = Signal(object)
 
-    def __init__(self, shot, origin, settings):
+    def __init__(self, shot, origin, settings, windows=()):
         super().__init__(None,
                          Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self._shot = shot
@@ -60,7 +61,6 @@ class Overlay(QWidget):
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
-        self.setCursor(Qt.CrossCursor)
         self.setGeometry(QRect(origin, shot.size()))
 
         # --- состояние ------------------------------------------------- #
@@ -73,6 +73,17 @@ class Overlay(QWidget):
         self._editor_pos = QPoint()
         self._cursor_pos = QPoint(-1, -1)
         self._has_selection = False
+
+        # Курсор: по умолчанию системная стрелка, перекрестие — по настройке.
+        self._crosshair = bool(settings.get("crosshair_cursor", False))
+        self.setCursor(self._idle_cursor())
+
+        # Окна для подсветки приходят снаружи в экранных координатах: внутри
+        # оверлея всё живёт со сдвигом на левый верхний угол снимка.
+        self._highlight = bool(settings.get("highlight_windows", True))
+        self._windows = [(hwnd, QRect(rect).translated(-origin))
+                         for hwnd, rect in (windows or ())]
+        self._hover_rect = None
 
         self.shapes = []
         self._draft = None
@@ -124,21 +135,23 @@ class Overlay(QWidget):
         p.drawPixmap(0, 0, self._shot)
 
         sel = self._sel_norm()
-        dim = QColor(0, 0, 0, DIM_ALPHA)
         if sel.isEmpty():
-            p.fillRect(self.rect(), dim)
+            # Выделения ещё нет: подсвечиваем окно под курсором — оно выглядит
+            # готовым к съёмке, остальной экран притушен.
+            hover = self._hover_rect
+            if hover is None:
+                p.fillRect(self.rect(), QColor(0, 0, 0, DIM_ALPHA))
+            else:
+                self._paint_dim_around(p, hover)
+                p.setRenderHint(QPainter.Antialiasing, False)
+                p.setPen(QPen(QColor(theme.OVERLAY["line"]), 2))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(hover.adjusted(1, 1, -2, -2))
+                self._paint_size_label(p, hover)
             p.end()
             return
 
-        # Затемняем всё, кроме выделения: четырьмя прямоугольниками — дешевле,
-        # чем регион с дыркой, и без швов по краям.
-        w, h = self.width(), self.height()
-        p.fillRect(QRect(0, 0, w, sel.top()), dim)
-        p.fillRect(QRect(0, sel.bottom() + 1, w, h - sel.bottom() - 1), dim)
-        p.fillRect(QRect(0, sel.top(), sel.left(), sel.height()), dim)
-        p.fillRect(QRect(sel.right() + 1, sel.top(),
-                         w - sel.right() - 1, sel.height()), dim)
-
+        self._paint_dim_around(p, sel)
         p.setRenderHint(QPainter.Antialiasing, True)
         self._paint_shapes(p, sel)
 
@@ -150,6 +163,17 @@ class Overlay(QWidget):
 
         self._paint_size_label(p, sel)
         p.end()
+
+    def _paint_dim_around(self, p, rect):
+        """Затемняет всё, кроме rect: четырьмя прямоугольниками — дешевле, чем
+        регион с дыркой, и без швов по краям."""
+        dim = QColor(0, 0, 0, DIM_ALPHA)
+        w, h = self.width(), self.height()
+        p.fillRect(QRect(0, 0, w, rect.top()), dim)
+        p.fillRect(QRect(0, rect.bottom() + 1, w, h - rect.bottom() - 1), dim)
+        p.fillRect(QRect(0, rect.top(), rect.left(), rect.height()), dim)
+        p.fillRect(QRect(rect.right() + 1, rect.top(),
+                         w - rect.right() - 1, rect.height()), dim)
 
     def _paint_shapes(self, p, sel):
         """Фигуры рисуются по всему экрану, без обрезки по рамке — как в
@@ -295,6 +319,7 @@ class Overlay(QWidget):
 
         if self._mode == _SELECTING:
             self.selection = QRect(self._anchor, pos).normalized()
+            self.setCursor(self._drag_cursor(pos))
         elif self._mode == _RESIZING:
             self.selection = self._resized(pos)
         elif self._mode == _MOVING:
@@ -307,8 +332,17 @@ class Overlay(QWidget):
             self._draft.update_to(pos, square=shift)
         else:
             self._sync_cursor(pos)
+            self._update_hover(pos)
 
         self.update()
+
+    def _update_hover(self, pos):
+        """Окно под курсором. Ищем, только пока выделения нет: дальше подсветка
+        мешала бы возиться с рамкой."""
+        if not self._highlight or self._has_selection or self._tool:
+            self._hover_rect = None
+            return
+        self._hover_rect = win_utils.window_at(pos, self._windows)
 
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.LeftButton:
@@ -328,11 +362,35 @@ class Overlay(QWidget):
         self.update()
 
     def mouseDoubleClickEvent(self, e):
+        if e.button() != Qt.LeftButton:
+            return
+        pos = self._clamp(e.position().toPoint())
+
         # Двойной клик внутри выделения копирует — привычка из Lightshot.
-        if (e.button() == Qt.LeftButton and self._has_selection
-                and not self._tool and self._sel_norm().contains(
-                    e.position().toPoint())):
+        if self._has_selection and not self._tool and self._sel_norm().contains(pos):
             self._on_action("copy")
+            return
+
+        # Пустой экран: двойной клик по подсвеченному окну берёт его целиком.
+        if not self._has_selection and self._hover_rect is not None:
+            self.select_rect(self._hover_rect)
+
+    def select_rect(self, rect):
+        """Ставит рамку по готовому прямоугольнику — так снимается целое окно."""
+        rect = QRect(rect).intersected(self.rect())
+        if rect.width() < 4 or rect.height() < 4:
+            return
+        self.selection = rect
+        self._has_selection = True
+        self._hover_rect = None
+        self._mode = _IDLE
+        self._show_panels()
+        self._sync_cursor(self._cursor_pos)
+        self.update()
+
+    def _idle_cursor(self):
+        """Обычное состояние: системная стрелка, если перекрестие не включено."""
+        return Qt.CrossCursor if self._crosshair else Qt.ArrowCursor
 
     def _sync_cursor(self, pos):
         handle = self._handle_at(pos)
@@ -342,7 +400,16 @@ class Overlay(QWidget):
                 and self._sel_norm().contains(pos)):
             self.setCursor(Qt.SizeAllCursor)
         else:
-            self.setCursor(Qt.CrossCursor)
+            self.setCursor(self._idle_cursor())
+
+    def _drag_cursor(self, pos):
+        """Курсор протяжки — тот же, что Windows показывает при растягивании
+        окна за угол; направление диагонали зависит от того, куда тянут."""
+        if self._crosshair:
+            return Qt.CrossCursor
+        forward = ((pos.x() - self._anchor.x()) *
+                   (pos.y() - self._anchor.y())) >= 0
+        return Qt.SizeFDiagCursor if forward else Qt.SizeBDiagCursor
 
     def _resized(self, pos):
         """Новая рамка при растяжке: ручка двигает только «свои» стороны, чтобы
@@ -518,6 +585,7 @@ class Overlay(QWidget):
     def _reset_selection(self):
         self._has_selection = False
         self.selection = QRect()
+        self._update_hover(self._cursor_pos)
         self.shapes.clear()
         self._draft = None
         self._cancel_text()

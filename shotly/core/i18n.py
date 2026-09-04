@@ -32,6 +32,10 @@ _RU = {
         "Показывать уведомления о копировании и сохранении",
     "Remember selection position":  "Сохранять позицию выделенной области",
     "Capture mouse cursor":         "Сохранять курсор на скриншоте",
+    "Crosshair instead of the mouse pointer":
+        "Перекрестие вместо курсора мыши",
+    "Highlight windows under the cursor":
+        "Подсвечивать окна под курсором",
     "Copy to clipboard after saving": "Копировать в буфер после сохранения",
     "Language":                     "Язык",
     "Open screenshots folder":      "Открыть папку скриншотов",
