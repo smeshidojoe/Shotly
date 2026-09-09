@@ -1,8 +1,11 @@
 """
-Панелька настроек размытия: вид (пиксели или мягкое), сила и размер кисти.
+Панелька настроек размытия: вид (пиксели или мягкое) и сила.
 
-Открывается с той же кнопки панели, что и палитра цветов: у инструментов
-размытия цвета нет, зато есть свои три параметра. Как и палитра — дочерний
+Форму области выбирают у самой кнопки инструмента (ui/flyout.py), а размер
+кисти меняют на лету — Alt и правая кнопка мыши.
+
+Открывается своей кнопкой в группе размытия — у этих инструментов нет цвета,
+зато есть четыре собственных параметра. Как и палитра цветов, это дочерний
 виджет оверлея, а не отдельное окно: попап отобрал бы у оверлея фокус.
 """
 
@@ -14,28 +17,27 @@ from ..core.blur import LEVELS
 from ..core.i18n import tr
 from . import icons, theme
 
-BRUSH_WIDTHS = (2, 4, 7, 11)      # множится на 6 в shapes.blur_brush_width
-
 _KINDS = (("pixel", "mosaic", "Pixels"), ("soft", "droplet", "Blur"))
+
+# Секции панельки: вид и сила.
+_KIND, _LEVEL = range(2)
 
 
 class BlurPopup(QWidget):
     kind_picked = Signal(str)
     level_picked = Signal(int)
-    brush_picked = Signal(int)
     closed = Signal()
 
-    def __init__(self, parent, kind, level, brush):
+    def __init__(self, parent, kind, level):
         super().__init__(parent)
         self._kind = kind
         self._level = int(level)
-        self._brush = int(brush)
         self._hover = (-1, -1)          # (секция, индекс)
 
         self._pad = theme.s(8)
         self._gap = theme.s(6)
         self._kind_h = theme.s(34)
-        self._row_h = theme.s(26)
+        self._row_h = theme.s(28)
         self._label_h = theme.s(16)
 
         self._font = QFont("Segoe UI")
@@ -44,45 +46,40 @@ class BlurPopup(QWidget):
         self._small.setPixelSize(theme.s(11))
 
         width = theme.s(212)
-        height = (self._pad * 2 + self._kind_h + self._gap
-                  + (self._label_h + self._row_h + self._gap) * 2 - self._gap)
+        rows = 1                        # только сила, со своей подписью
+        height = (self._pad * 2 + self._kind_h
+                  + (self._gap + self._label_h + self._row_h) * rows)
         self.resize(width, height)
         self.setMouseTracking(True)
         self.setCursor(Qt.ArrowCursor)
 
     # --- геометрия ------------------------------------------------------ #
+    def _row_top(self, index):
+        """Верх ряда с ячейками: сейчас он один — сила."""
+        return (self._pad + self._kind_h
+                + (self._gap + self._label_h + self._row_h) * index
+                + self._gap + self._label_h)
+
+    def _cells(self, index, count):
+        inner = self.width() - self._pad * 2
+        cell = inner // count
+        top = self._row_top(index)
+        return [QRect(self._pad + i * cell, top, cell, self._row_h)
+                for i in range(count)]
+
     def _kind_rect(self, i):
         inner = self.width() - self._pad * 2
         cell = (inner - self._gap) // 2
         return QRect(self._pad + i * (cell + self._gap), self._pad,
                      cell, self._kind_h)
 
-    def _levels_top(self):
-        return self._pad + self._kind_h + self._gap + self._label_h
-
-    def _level_rect(self, i):
-        inner = self.width() - self._pad * 2
-        cell = inner // len(LEVELS)
-        return QRect(self._pad + i * cell, self._levels_top(), cell, self._row_h)
-
-    def _brushes_top(self):
-        return self._levels_top() + self._row_h + self._gap + self._label_h
-
-    def _brush_rect(self, i):
-        inner = self.width() - self._pad * 2
-        cell = inner // len(BRUSH_WIDTHS)
-        return QRect(self._pad + i * cell, self._brushes_top(), cell, self._row_h)
-
     def _hit(self, pos):
         for i in range(len(_KINDS)):
             if self._kind_rect(i).contains(pos):
-                return (0, i)
-        for i in range(len(LEVELS)):
-            if self._level_rect(i).contains(pos):
-                return (1, i)
-        for i in range(len(BRUSH_WIDTHS)):
-            if self._brush_rect(i).contains(pos):
-                return (2, i)
+                return (_KIND, i)
+        for i, rect in enumerate(self._cells(0, len(LEVELS))):
+            if rect.contains(pos):
+                return (_LEVEL, i)
         return (-1, -1)
 
     # --- ввод ------------------------------------------------------------ #
@@ -103,15 +100,12 @@ class BlurPopup(QWidget):
         if e.button() != Qt.LeftButton:
             return
         section, i = self._hit(e.position().toPoint())
-        if section == 0:
+        if section == _KIND:
             self._kind = _KINDS[i][0]
             self.kind_picked.emit(self._kind)
-        elif section == 1:
+        elif section == _LEVEL:
             self._level = LEVELS[i]
             self.level_picked.emit(self._level)
-        elif section == 2:
-            self._brush = BRUSH_WIDTHS[i]
-            self.brush_picked.emit(self._brush)
         # Панель не закрываем: параметры обычно подбирают в несколько кликов.
         self.update()
         e.accept()
@@ -129,12 +123,8 @@ class BlurPopup(QWidget):
         p.drawRoundedRect(r, theme.s(9), theme.s(9))
 
         self._paint_kinds(p)
-        self._paint_label(p, tr("Strength"),
-                          self._levels_top() - self._label_h)
+        self._paint_label(p, tr("Strength"), 0)
         self._paint_levels(p)
-        self._paint_label(p, tr("Brush size"),
-                          self._brushes_top() - self._label_h)
-        self._paint_brushes(p)
         p.end()
 
     def _cell_bg(self, p, rect, selected, hovered):
@@ -151,7 +141,7 @@ class BlurPopup(QWidget):
         for i, (key, icon_name, label) in enumerate(_KINDS):
             rect = self._kind_rect(i)
             selected = key == self._kind
-            self._cell_bg(p, rect, selected, self._hover == (0, i))
+            self._cell_bg(p, rect, selected, self._hover == (_KIND, i))
             col = (theme.OVERLAY["active"] if selected
                    else theme.PALETTE["text_dim"])
             p.drawPixmap(rect.left() + theme.s(10),
@@ -162,33 +152,25 @@ class BlurPopup(QWidget):
                              rect.top(), rect.width(), rect.height()),
                        Qt.AlignLeft | Qt.AlignVCenter, tr(label))
 
-    def _paint_label(self, p, text, top):
+    def _paint_label(self, p, text, row):
         p.setFont(self._small)
         p.setPen(QPen(theme.color("text_dim")))
+        top = self._row_top(row) - self._label_h
         p.drawText(QRect(self._pad, top, self.width() - self._pad * 2,
                          self._label_h),
                    Qt.AlignLeft | Qt.AlignVCenter, text)
 
     def _paint_levels(self, p):
         # Сила показана размером клеток: чем крупнее, тем сильнее замазывает.
-        for i, level in enumerate(LEVELS):
-            rect = self._level_rect(i)
-            self._cell_bg(p, rect, level == self._level, self._hover == (1, i))
+        for i, (rect, level) in enumerate(zip(self._cells(0, len(LEVELS)),
+                                              LEVELS)):
+            self._cell_bg(p, rect, level == self._level,
+                          self._hover == (_LEVEL, i))
             cell = theme.s(2 + level)
             p.setPen(Qt.NoPen)
             p.setBrush(theme.color("text" if level == self._level else "text_dim"))
-            block = QRectF(rect.center().x() - cell, rect.center().y() - cell,
-                           cell * 2, cell * 2)
-            p.drawRect(block)
-
-    def _paint_brushes(self, p):
-        for i, width in enumerate(BRUSH_WIDTHS):
-            rect = self._brush_rect(i)
-            self._cell_bg(p, rect, width == self._brush, self._hover == (2, i))
-            p.setPen(Qt.NoPen)
-            p.setBrush(theme.color("text" if width == self._brush else "text_dim"))
-            d = theme.s(width)
-            p.drawEllipse(rect.center(), d / 2.0, d / 2.0)
+            p.drawRect(QRectF(rect.center().x() - cell, rect.center().y() - cell,
+                              cell * 2, cell * 2))
 
     # --- показ ------------------------------------------------------------ #
     def popup_at(self, top_right):

@@ -61,6 +61,14 @@ def clear_cache():
 # ------------------------------------------------------------------ #
 #  Инструменты рисования
 # ------------------------------------------------------------------ #
+def _cursor(p, col):
+    # Классическая стрелка выбора с «хвостиком».
+    arrow = QPolygonF([QPointF(6.4, 3.6), QPointF(6.4, 17.6), QPointF(10.0, 14.2),
+                       QPointF(12.4, 19.8), QPointF(15.0, 18.6),
+                       QPointF(12.6, 13.2), QPointF(17.4, 12.6)])
+    p.drawPolygon(arrow)
+
+
 def _pen(p, col):
     # Карандаш: корпус по диагонали + грифель.
     body = QPolygonF([QPointF(5, 19), QPointF(6.6, 14.6), QPointF(16.4, 4.8),
@@ -104,20 +112,83 @@ def _marker(p, col):
     p.drawLine(QPointF(5, 20.4), QPointF(15, 20.4))
 
 
+def _quill(p, col):
+    # Перо: наконечник и кривая с узлом — намёк на кривые Безье.
+    nib = QPolygonF([QPointF(4.6, 19.4), QPointF(6.2, 14.4),
+                     QPointF(9.0, 17.2)])
+    p.drawPolygon(nib)
+    curve = QPainterPath(QPointF(7.4, 15.4))
+    curve.cubicTo(QPointF(12.0, 9.0), QPointF(14.0, 5.6), QPointF(19.4, 5.0))
+    p.drawPath(curve)
+    p.setPen(Qt.NoPen)
+    p.setBrush(col)
+    p.drawEllipse(QPointF(19.4, 5.0), 1.7, 1.7)
+
+
+def _bucket_body(p, col):
+    """Наклонённое ведро — общая часть иконок заливки."""
+    body = QPolygonF([QPointF(4.6, 11.4), QPointF(11.8, 4.2),
+                      QPointF(19.4, 11.8), QPointF(12.2, 19.0)])
+    p.drawPolygon(body)
+    p.drawLine(QPointF(8.2, 7.8), QPointF(8.2, 4.6))
+
+
+def _bucket(p, col):
+    _bucket_body(p, col)
+    # Капля, падающая из ведра: без неё это просто ромб.
+    p.setPen(Qt.NoPen)
+    p.setBrush(col)
+    drop = QPainterPath(QPointF(19.0, 13.6))
+    drop.cubicTo(QPointF(21.6, 17.0), QPointF(21.6, 18.4), QPointF(19.0, 18.4))
+    drop.cubicTo(QPointF(16.4, 18.4), QPointF(16.4, 17.0), QPointF(19.0, 13.6))
+    p.drawPath(drop)
+
+
+def _unbucket(p, col):
+    _bucket_body(p, col)
+    # Перечёркнутая капля: «снять заливку».
+    p.drawLine(QPointF(16.0, 20.4), QPointF(21.6, 14.8))
+
+
+def _eraser(p, col):
+    # Наклонный брусок ластика и след под ним.
+    body = QPolygonF([QPointF(4.6, 15.4), QPointF(12.6, 4.6),
+                      QPointF(19.4, 9.4), QPointF(11.4, 20.2),
+                      QPointF(7.4, 20.2)])
+    p.drawPolygon(body)
+    p.drawLine(QPointF(8.6, 10.0), QPointF(15.6, 15.0))
+
+
 def _text(p, col):
     p.drawLine(QPointF(6, 6), QPointF(18, 6))
     p.drawLine(QPointF(12, 6), QPointF(12, 18.5))
     p.drawLine(QPointF(9, 18.5), QPointF(15, 18.5))
 
 
-def _blur_rect(p, col):
-    # Рамка с мозаикой внутри: сразу читается как «замазать область».
-    p.drawRoundedRect(QRectF(4.5, 6.5, 15, 11), 1.5, 1.5)
+def _blur_cells(p, col, inset=0.0):
+    """Мозаика внутри контура — общая начинка иконок размытия областью."""
     p.setPen(Qt.NoPen)
     p.setBrush(col)
-    for x in (7.0, 10.6, 14.2):
+    for x in (7.0 + inset, 10.6, 14.2 - inset):
         for y in (9.0, 12.6):
             p.drawRect(QRectF(x, y, 2.6, 2.6))
+
+
+def _blur_rect(p, col):
+    # Рамка с мозаикой внутри: сразу читается как «замазать область».
+    p.drawRect(QRectF(4.5, 6.5, 15, 11))
+    _blur_cells(p, col)
+
+
+def _blur_round(p, col):
+    p.drawRoundedRect(QRectF(4.5, 6.5, 15, 11), 4.0, 4.0)
+    _blur_cells(p, col)
+
+
+def _blur_ellipse(p, col):
+    p.drawEllipse(QRectF(4.0, 6.5, 16, 11))
+    # У овала углы срезаны — крайние клетки подбираем внутрь, иначе они торчат.
+    _blur_cells(p, col, inset=0.7)
 
 
 def _blur_brush(p, col):
@@ -130,6 +201,43 @@ def _blur_brush(p, col):
     p.setBrush(col)
     for x, y, r in ((5.4, 20.4, 1.6), (9.6, 20.8, 1.2), (13.4, 20.4, 0.9)):
         p.drawEllipse(QPointF(x, y), r, r)
+
+
+def _shape_rect(p, col):
+    p.drawRect(QRectF(4.5, 6.5, 15, 11))
+
+
+def _shape_round(p, col):
+    p.drawRoundedRect(QRectF(4.5, 6.5, 15, 11), 4.0, 4.0)
+
+
+def _shape_ellipse(p, col):
+    p.drawEllipse(QRectF(4.0, 6.5, 16, 11))
+
+
+def _trash(p, col):
+    p.drawLine(QPointF(4.5, 7.0), QPointF(19.5, 7.0))
+    p.drawLine(QPointF(9.5, 7.0), QPointF(10.2, 4.6))
+    p.drawLine(QPointF(10.2, 4.6), QPointF(13.8, 4.6))
+    p.drawLine(QPointF(13.8, 4.6), QPointF(14.5, 7.0))
+    body = QPainterPath(QPointF(6.4, 7.0))
+    body.lineTo(QPointF(7.4, 19.4))
+    body.lineTo(QPointF(16.6, 19.4))
+    body.lineTo(QPointF(17.6, 7.0))
+    p.drawPath(body)
+    p.drawLine(QPointF(10.4, 10.2), QPointF(10.8, 16.4))
+    p.drawLine(QPointF(13.6, 10.2), QPointF(13.2, 16.4))
+
+
+def _image(p, col):
+    # Рамка с «горой» и солнцем — привычный значок картинки.
+    p.drawRoundedRect(QRectF(3.5, 5.5, 17, 13), 2.0, 2.0)
+    p.setPen(Qt.NoPen)
+    p.setBrush(col)
+    p.drawEllipse(QPointF(8.4, 10.0), 1.5, 1.5)
+    p.drawPolygon(QPolygonF([QPointF(5.6, 17.4), QPointF(11.2, 11.6),
+                             QPointF(14.4, 15.2), QPointF(16.0, 13.6),
+                             QPointF(19.0, 17.4)]))
 
 
 def _mosaic(p, col):
@@ -156,6 +264,15 @@ def _undo(p, col):
     p.drawPath(path)
     p.drawLine(QPointF(6, 11), QPointF(5.4, 6.2))
     p.drawLine(QPointF(6, 11), QPointF(10.6, 10.2))
+
+
+def _redo(p, col):
+    # Та же дуга зеркально: «повторить» читается как отражение «отменить».
+    p.save()
+    p.translate(24, 0)
+    p.scale(-1, 1)
+    _undo(p, col)
+    p.restore()
 
 
 # ------------------------------------------------------------------ #
@@ -226,10 +343,15 @@ def _quit(p, col):
 
 
 _PAINTERS = {
-    "pen": _pen, "line": _line, "arrow": _arrow, "rect": _rect,
-    "marker": _marker, "text": _text, "undo": _undo,
-    "blur_rect": _blur_rect, "blur_brush": _blur_brush,
+    "select": _cursor, "pen": _pen, "line": _line, "arrow": _arrow, "rect": _rect,
+    "marker": _marker, "eraser": _eraser, "text": _text,
+    "bucket": _bucket, "unbucket": _unbucket, "quill": _quill,
+    "undo": _undo, "redo": _redo,
+    "blur_rect": _blur_rect, "blur_round": _blur_round,
+    "blur_ellipse": _blur_ellipse, "blur_brush": _blur_brush,
     "mosaic": _mosaic, "droplet": _droplet,
+    "shape_rect": _shape_rect, "shape_round": _shape_round,
+    "shape_ellipse": _shape_ellipse, "image": _image, "trash": _trash,
     "print": _print, "copy": _copy, "save": _save, "close": _close,
     "check": _check, "settings": _settings, "camera": _camera,
     "info": _info, "quit": _quit,

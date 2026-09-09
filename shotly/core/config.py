@@ -43,12 +43,20 @@ def defaults():
         # --- Рисование ---------------------------------------------------- #
         "draw_color":          "#ff2d2d",
         "draw_width":          3,
+        # Форма контурной фигуры: rect | round | ellipse.
+        "draw_shape":          "rect",
+        # Режим ведра: fill (залить) или unfill (снять заливку).
+        "bucket_mode":         "fill",
         "last_tool":           "pen",
         # Размытие: pixel (квадраты) или soft (мягкое), сила 1..4 и толщина
         # кисти (умножается на 6 — замазывать надо широко).
         "blur_kind":           "pixel",
         "blur_level":          2,
         "blur_brush":          4,
+        # Ластик крупнее линий: им затирают, а не рисуют.
+        "eraser_width":        4,
+        # Форма области размытия: rect | round | ellipse.
+        "blur_shape":          "rect",
 
         # --- Обновления --------------------------------------------------- #
         "check_updates":       True,       # проверять и уведомлять о новых версиях
@@ -61,9 +69,13 @@ def defaults():
 _ENUMS = {
     "language":     ("ru", "en"),
     "image_format": ("png", "jpg", "bmp"),
-    "last_tool":    ("pen", "line", "arrow", "rect", "marker", "text",
-                     "blur_rect", "blur_brush"),
+    "last_tool":    ("select", "pen", "line", "arrow", "rect", "marker",
+                     "eraser", "bucket", "quill", "text", "blur_rect",
+                     "blur_brush"),
     "blur_kind":    ("pixel", "soft"),
+    "blur_shape":   ("rect", "round", "ellipse"),
+    "draw_shape":   ("rect", "round", "ellipse"),
+    "bucket_mode":  ("fill", "unfill"),
 }
 
 
@@ -103,6 +115,7 @@ def validate(data):
     data["draw_width"]   = _num_in(data.get("draw_width"), 1, 20, 3)
     data["blur_level"]   = _num_in(data.get("blur_level"), 1, 4, 2)
     data["blur_brush"]   = _num_in(data.get("blur_brush"), 1, 20, 4)
+    data["eraser_width"] = _num_in(data.get("eraser_width"), 1, 20, 4)
 
     if not str(data.get("save_dir") or "").strip():
         data["save_dir"] = d["save_dir"]

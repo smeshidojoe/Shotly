@@ -1,5 +1,6 @@
 """
 Выбор цвета и толщины линии — всплывающая панелька рядом с образцом цвета.
+Форму фигуры выбирают не здесь, а прямо у её кнопки (ui/flyout.py).
 
 Тоже дочерний виджет оверлея: отдельное окно-попап отобрало бы у оверлея фокус,
 и первый же клик мимо снял бы выделение.
@@ -21,6 +22,9 @@ WIDTHS = [2, 3, 5, 8]
 
 _COLS = 6
 
+# Секции панельки: цвета, толщина, системный выбор цвета.
+_COLOR, _WIDTH, _MORE = range(3)
+
 
 class ColorPopup(QWidget):
     color_picked = Signal(str)
@@ -31,7 +35,7 @@ class ColorPopup(QWidget):
         super().__init__(parent)
         self._color = QColor(color)
         self._width = int(width)
-        self._hover = (-1, -1)          # (секция, индекс): 0 цвета, 1 толщины, 2 «ещё»
+        self._hover = (-1, -1)          # (секция, индекс)
 
         self._pad = theme.s(8)
         self._cell = theme.s(20)
@@ -44,8 +48,7 @@ class ColorPopup(QWidget):
         w = self._pad * 2 + _COLS * self._cell + (_COLS - 1) * self._gap
         h = (self._pad * 2
              + rows * self._cell + (rows - 1) * self._gap
-             + self._gap + self._row_h            # толщины
-             + self._gap + self._row_h)           # «Другие цвета...»
+             + (self._gap + self._row_h) * 2)   # толщина и «другие цвета»
         self.resize(w, h)
         self.setMouseTracking(True)
 
@@ -56,29 +59,32 @@ class ColorPopup(QWidget):
                      self._pad + row * (self._cell + self._gap),
                      self._cell, self._cell)
 
-    def _widths_top(self):
+    def _row_top(self, index):
+        """Верх ряда под палитрой: 0 — толщина, 1 — «другие цвета»."""
         rows = (len(SWATCHES) + _COLS - 1) // _COLS
-        return self._pad + rows * (self._cell + self._gap) + self._gap
+        return (self._pad + rows * (self._cell + self._gap)
+                + self._gap + (self._row_h + self._gap) * index)
 
-    def _width_rect(self, i):
-        n = len(WIDTHS)
+    def _cells(self, index, count):
         inner = self.width() - self._pad * 2
-        cell = inner // n
-        return QRect(self._pad + i * cell, self._widths_top(), cell, self._row_h)
+        cell = inner // count
+        top = self._row_top(index)
+        return [QRect(self._pad + i * cell, top, cell, self._row_h)
+                for i in range(count)]
 
     def _more_rect(self):
-        top = self._widths_top() + self._row_h + self._gap
-        return QRect(self._pad, top, self.width() - self._pad * 2, self._row_h)
+        return QRect(self._pad, self._row_top(1),
+                     self.width() - self._pad * 2, self._row_h)
 
     def _hit(self, pos):
         for i in range(len(SWATCHES)):
             if self._swatch_rect(i).contains(pos):
-                return (0, i)
-        for i in range(len(WIDTHS)):
-            if self._width_rect(i).contains(pos):
-                return (1, i)
+                return (_COLOR, i)
+        for i, rect in enumerate(self._cells(0, len(WIDTHS))):
+            if rect.contains(pos):
+                return (_WIDTH, i)
         if self._more_rect().contains(pos):
-            return (2, 0)
+            return (_MORE, 0)
         return (-1, -1)
 
     # --- ввод ------------------------------------------------------------ #
@@ -99,15 +105,15 @@ class ColorPopup(QWidget):
         if e.button() != Qt.LeftButton:
             return
         section, i = self._hit(e.position().toPoint())
-        if section == 0:
+        if section == _COLOR:
             self._color = QColor(SWATCHES[i])
             self.color_picked.emit(SWATCHES[i])
             self.closed.emit()
-        elif section == 1:
+        elif section == _WIDTH:
             self._width = WIDTHS[i]
             self.width_picked.emit(WIDTHS[i])
             self.update()
-        elif section == 2:
+        elif section == _MORE:
             self._open_dialog()
         e.accept()
 
@@ -133,39 +139,11 @@ class ColorPopup(QWidget):
         p.setBrush(bg)
         p.drawRoundedRect(r, theme.s(9), theme.s(9))
 
-        for i, name in enumerate(SWATCHES):
-            rect = QRectF(self._swatch_rect(i))
-            p.setBrush(QColor(name))
-            selected = QColor(name) == self._color
-            if selected:
-                p.setPen(QPen(QColor(theme.OVERLAY["active"]), theme.s(2)))
-            elif self._hover == (0, i):
-                p.setPen(QPen(theme.color("text"), 1))
-            else:
-                p.setPen(QPen(QColor(0, 0, 0, 90), 1))
-            p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5),
-                              theme.s(4), theme.s(4))
-
-        # Толщина: точка размером с саму линию — понятнее числа.
-        for i, w in enumerate(WIDTHS):
-            rect = self._width_rect(i)
-            if self._width == w:
-                p.setPen(Qt.NoPen)
-                p.setBrush(theme.color("field_hi"))
-                p.drawRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1),
-                                  theme.s(5), theme.s(5))
-            elif self._hover == (1, i):
-                p.setPen(Qt.NoPen)
-                p.setBrush(theme.color("field"))
-                p.drawRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1),
-                                  theme.s(5), theme.s(5))
-            p.setPen(Qt.NoPen)
-            p.setBrush(self._color if self._color.alpha() else theme.color("text"))
-            d = theme.s(w)
-            p.drawEllipse(rect.center(), d / 2.0, d / 2.0)
+        self._paint_swatches(p)
+        self._paint_widths(p)
 
         rect = self._more_rect()
-        if self._hover == (2, 0):
+        if self._hover == (_MORE, 0):
             p.setPen(Qt.NoPen)
             p.setBrush(theme.color("field"))
             p.drawRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1),
@@ -174,6 +152,37 @@ class ColorPopup(QWidget):
         p.setPen(QPen(theme.color("text_dim")))
         p.drawText(rect, Qt.AlignCenter, tr("More colors..."))
         p.end()
+
+    def _cell_bg(self, p, rect, selected, hovered):
+        if not selected and not hovered:
+            return
+        p.setPen(Qt.NoPen)
+        p.setBrush(theme.color("field_hi") if selected else theme.color("field"))
+        p.drawRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1),
+                          theme.s(5), theme.s(5))
+
+    def _paint_swatches(self, p):
+        for i, name in enumerate(SWATCHES):
+            rect = QRectF(self._swatch_rect(i))
+            p.setBrush(QColor(name))
+            selected = QColor(name) == self._color
+            if selected:
+                p.setPen(QPen(QColor(theme.OVERLAY["active"]), theme.s(2)))
+            elif self._hover == (_COLOR, i):
+                p.setPen(QPen(theme.color("text"), 1))
+            else:
+                p.setPen(QPen(QColor(0, 0, 0, 90), 1))
+            p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5),
+                              theme.s(4), theme.s(4))
+
+    def _paint_widths(self, p):
+        # Толщина: точка размером с саму линию — понятнее числа.
+        for i, (rect, w) in enumerate(zip(self._cells(0, len(WIDTHS)), WIDTHS)):
+            self._cell_bg(p, rect, w == self._width, self._hover == (_WIDTH, i))
+            p.setPen(Qt.NoPen)
+            p.setBrush(self._color if self._color.alpha() else theme.color("text"))
+            d = theme.s(w)
+            p.drawEllipse(rect.center(), d / 2.0, d / 2.0)
 
     def popup_at(self, top_right):
         """Ставит панельку левее точки top_right, не вылезая за окно-родителя."""
