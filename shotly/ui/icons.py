@@ -110,6 +110,46 @@ def _text(p, col):
     p.drawLine(QPointF(9, 18.5), QPointF(15, 18.5))
 
 
+def _blur_rect(p, col):
+    # Рамка с мозаикой внутри: сразу читается как «замазать область».
+    p.drawRoundedRect(QRectF(4.5, 6.5, 15, 11), 1.5, 1.5)
+    p.setPen(Qt.NoPen)
+    p.setBrush(col)
+    for x in (7.0, 10.6, 14.2):
+        for y in (9.0, 12.6):
+            p.drawRect(QRectF(x, y, 2.6, 2.6))
+
+
+def _blur_brush(p, col):
+    # Тот же корпус, что у маркера, но след — из размытых пятен.
+    body = QPolygonF([QPointF(8, 15), QPointF(14.5, 4.5), QPointF(19, 7.5),
+                      QPointF(12.5, 18), QPointF(8.5, 18)])
+    p.drawPolygon(body)
+    p.drawLine(QPointF(8, 15), QPointF(12.5, 18))
+    p.setPen(Qt.NoPen)
+    p.setBrush(col)
+    for x, y, r in ((5.4, 20.4, 1.6), (9.6, 20.8, 1.2), (13.4, 20.4, 0.9)):
+        p.drawEllipse(QPointF(x, y), r, r)
+
+
+def _mosaic(p, col):
+    p.setPen(Qt.NoPen)
+    p.setBrush(col)
+    for i, x in enumerate((5.0, 10.0, 15.0)):
+        for j, y in enumerate((5.0, 10.0, 15.0)):
+            side = 4.0 if (i + j) % 2 == 0 else 3.0
+            p.drawRect(QRectF(x, y, side, side))
+
+
+def _droplet(p, col):
+    # Капля: вершина сверху, круглое основание — общепринятый значок размытия.
+    path = QPainterPath(QPointF(12, 3.5))
+    path.cubicTo(QPointF(18.5, 10.5), QPointF(19.5, 13.0), QPointF(19.5, 15.0))
+    path.arcTo(QRectF(4.5, 7.5, 15, 15), 0, -180)
+    path.cubicTo(QPointF(4.5, 13.0), QPointF(5.5, 10.5), QPointF(12, 3.5))
+    p.drawPath(path)
+
+
 def _undo(p, col):
     path = QPainterPath(QPointF(6, 11))
     path.arcTo(QRectF(6, 6.5, 13, 11), 170, -230)
@@ -188,6 +228,8 @@ def _quit(p, col):
 _PAINTERS = {
     "pen": _pen, "line": _line, "arrow": _arrow, "rect": _rect,
     "marker": _marker, "text": _text, "undo": _undo,
+    "blur_rect": _blur_rect, "blur_brush": _blur_brush,
+    "mosaic": _mosaic, "droplet": _droplet,
     "print": _print, "copy": _copy, "save": _save, "close": _close,
     "check": _check, "settings": _settings, "camera": _camera,
     "info": _info, "quit": _quit,

@@ -44,6 +44,11 @@ def defaults():
         "draw_color":          "#ff2d2d",
         "draw_width":          3,
         "last_tool":           "pen",
+        # Размытие: pixel (квадраты) или soft (мягкое), сила 1..4 и толщина
+        # кисти (умножается на 6 — замазывать надо широко).
+        "blur_kind":           "pixel",
+        "blur_level":          2,
+        "blur_brush":          4,
 
         # --- Обновления --------------------------------------------------- #
         "check_updates":       True,       # проверять и уведомлять о новых версиях
@@ -56,7 +61,9 @@ def defaults():
 _ENUMS = {
     "language":     ("ru", "en"),
     "image_format": ("png", "jpg", "bmp"),
-    "last_tool":    ("pen", "line", "arrow", "rect", "marker", "text"),
+    "last_tool":    ("pen", "line", "arrow", "rect", "marker", "text",
+                     "blur_rect", "blur_brush"),
+    "blur_kind":    ("pixel", "soft"),
 }
 
 
@@ -94,6 +101,8 @@ def validate(data):
 
     data["jpeg_quality"] = _num_in(data.get("jpeg_quality"), 10, 100, 92)
     data["draw_width"]   = _num_in(data.get("draw_width"), 1, 20, 3)
+    data["blur_level"]   = _num_in(data.get("blur_level"), 1, 4, 2)
+    data["blur_brush"]   = _num_in(data.get("blur_brush"), 1, 20, 4)
 
     if not str(data.get("save_dir") or "").strip():
         data["save_dir"] = d["save_dir"]

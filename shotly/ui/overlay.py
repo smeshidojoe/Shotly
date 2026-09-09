@@ -14,9 +14,11 @@ from PySide6.QtWidgets import QLineEdit, QWidget
 
 from ..core import capture
 from ..core import windows as win_utils
+from ..core.blur import BlurCache
 from ..core.constants import DIM_ALPHA, HANDLE_SIZE
 from . import shapes as shapes_mod
 from . import theme
+from .blurpop import BlurPopup
 from .colorpop import ColorPopup
 from .toolbars import ActionPanel, ToolPanel
 
@@ -93,10 +95,18 @@ class Overlay(QWidget):
         self._color = settings.get("draw_color", "#ff2d2d")
         self._width = int(settings.get("draw_width", 3))
 
+        # Размытие: вид, сила и толщина кисти живут между съёмками, а размытые
+        # копии снимка считаются лениво — при первом же мазке.
+        self._blur_kind = settings.get("blur_kind", "pixel")
+        self._blur_level = int(settings.get("blur_level", 2))
+        self._blur_brush = int(settings.get("blur_brush", 4))
+        self._blur = BlurCache(shot)
+
         # --- панели ------------------------------------------------------ #
-        self.tools = ToolPanel(self, self._color)
+        self.tools = ToolPanel(self, self._color, self._blur_kind)
         self.tools.tool_picked.connect(self._set_tool)
         self.tools.color_clicked.connect(self._toggle_color_popup)
+        self.tools.blur_clicked.connect(self._toggle_blur_popup)
         self.tools.undo_clicked.connect(self.undo)
         self.tools.hide()
 
@@ -105,6 +115,7 @@ class Overlay(QWidget):
         self.actions_bar.hide()
 
         self._popup = None
+        self._popup_kind = ""          # какая панелька открыта: color | blur
         self._editor = None            # QLineEdit инструмента «Текст»
 
         self._label_font = QFont("Segoe UI")
@@ -186,7 +197,7 @@ class Overlay(QWidget):
         if self._draft is not None:
             items.append(self._draft)
         if items:
-            shapes_mod.draw_all(p, items)
+            shapes_mod.draw_all(p, items, blur=self._blur)
 
     def _paint_frame(self, p, sel):
         """Рамка «бегущими муравьями»: сплошная чёрная линия, поверх неё белый
@@ -444,13 +455,16 @@ class Overlay(QWidget):
         self._commit_text()
         self._tool = name or ""
         self._settings["last_tool"] = self._tool or self._settings.get("last_tool")
+        self._close_popup()
         self._sync_cursor(self._cursor_pos)
 
     def _start_draw(self, pos):
         if self._tool == "text":
             self._open_text_editor(pos)
             return
-        self._draft = shapes_mod.create(self._tool, self._color, self._width, pos)
+        width = (self._blur_brush if self._tool == "blur_brush" else self._width)
+        self._draft = shapes_mod.create(self._tool, self._color, width, pos,
+                                        self._blur_kind, self._blur_level)
         self._mode = _DRAWING
         # Панели не прячем: в Lightshot они на месте всё время рисования, а
         # мигание на каждый штрих раздражает сильнее, чем закрытый ими угол.
@@ -523,19 +537,38 @@ class Overlay(QWidget):
 
     # --- цвет ------------------------------------------------------------ #
     def _toggle_color_popup(self):
-        if self._popup is not None:
+        # Повторный клик по своей кнопке закрывает панельку, клик по соседней —
+        # подменяет её, а не оставляет обе висеть.
+        if self._popup_kind == "color":
             self._close_popup()
             return
+        self._close_popup()
         pop = ColorPopup(self, self._color, self._width)
         pop.color_picked.connect(self._set_color)
         pop.width_picked.connect(self._set_width)
+        self._show_popup(pop, "color", self.tools.color_btn)
+
+    def _toggle_blur_popup(self):
+        if self._popup_kind == "blur":
+            self._close_popup()
+            return
+        self._close_popup()
+        pop = BlurPopup(self, self._blur_kind, self._blur_level, self._blur_brush)
+        pop.kind_picked.connect(self._set_blur_kind)
+        pop.level_picked.connect(self._set_blur_level)
+        pop.brush_picked.connect(self._set_blur_brush)
+        self._show_popup(pop, "blur", self.tools.blur_btn)
+
+    def _show_popup(self, pop, kind, anchor):
         pop.closed.connect(self._close_popup)
-        top_right = self.tools.mapTo(self, QPoint(0, self.tools.color_btn.y()))
+        top_right = self.tools.mapTo(self, QPoint(0, anchor.y()))
         pop.popup_at(QPoint(top_right.x() - theme.s(6), top_right.y()))
         self._popup = pop
+        self._popup_kind = kind
 
     def _close_popup(self):
         pop, self._popup = self._popup, None
+        self._popup_kind = ""
         if pop is not None:
             pop.hide()
             pop.deleteLater()
@@ -550,6 +583,32 @@ class Overlay(QWidget):
     def _set_width(self, w):
         self._width = int(w)
         self._settings["draw_width"] = int(w)
+
+    # --- размытие --------------------------------------------------------- #
+    def _set_blur_kind(self, kind):
+        self._blur_kind = kind
+        self._settings["blur_kind"] = kind
+        self.tools.set_blur_kind(kind)
+        self._reblur_draft()
+
+    def _set_blur_level(self, level):
+        self._blur_level = int(level)
+        self._settings["blur_level"] = int(level)
+        self._reblur_draft()
+
+    def _set_blur_brush(self, width):
+        self._blur_brush = int(width)
+        self._settings["blur_brush"] = int(width)
+
+    def _reblur_draft(self):
+        """Смена вида или силы перерисовывает последнюю фигуру размытия: иначе
+        пришлось бы отменять её и рисовать заново, чтобы увидеть разницу."""
+        for shape in reversed(self.shapes):
+            if shape.kind in shapes_mod.BLUR_TOOLS:
+                shape.blur_kind = self._blur_kind
+                shape.blur_level = self._blur_level
+                break
+        self.update()
 
     # ------------------------------------------------------------------ #
     #  Панели
@@ -620,6 +679,8 @@ class Overlay(QWidget):
             painter.drawPixmap(target.topLeft(), pixmap)
         finally:
             painter.end()
+        # Снимок изменился — размытые копии по нему больше не годятся.
+        self._blur.set_source(self._shot)
         return True
 
     # ------------------------------------------------------------------ #
@@ -684,7 +745,7 @@ class Overlay(QWidget):
             try:
                 p.setRenderHint(QPainter.Antialiasing, True)
                 p.translate(-sel.topLeft())
-                shapes_mod.draw_all(p, self.shapes, QRectF(sel))
+                shapes_mod.draw_all(p, self.shapes, QRectF(sel), self._blur)
             finally:
                 p.end()
         return pm
