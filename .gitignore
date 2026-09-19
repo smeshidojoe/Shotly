@@ -7,3 +7,4 @@ _update/
 .venv/
 venv/
 *.spec.bak
+brag-output/
